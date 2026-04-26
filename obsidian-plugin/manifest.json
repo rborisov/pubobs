@@ -1,0 +1,10 @@
+{
+  "id": "pubobs",
+  "name": "PubObs",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Collaborative publishing via Git",
+  "author": "PubObs",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}
