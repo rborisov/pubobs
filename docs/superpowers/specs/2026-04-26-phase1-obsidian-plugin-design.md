@@ -23,7 +23,7 @@ Key decisions:
 
 Four focused modules wired by a thin orchestrator.
 
-**Vault / repo relationship:** The Obsidian vault directory is the Git working tree root (`.git/` lives at vault root). On first use the author clones the remote into an empty vault directory, or runs "Initialize repo" from the command palette to `git init` an existing vault and add the remote.
+**Vault / repo relationship:** A vault can contain multiple linked folders. Each linked folder is an independent Git working tree (`.git/` lives inside the folder, not at vault root). One vault can have many folders each pointing to a different remote repo (e.g. separate wikis per project). On first use the author registers a folder via the settings UI, which clones the remote into that folder or initializes an existing folder as a repo.
 
 ### SettingsManager
 
@@ -33,11 +33,19 @@ Settings model:
 
 ```ts
 interface PubObsSettings {
+  defaultUsername: string;
+  defaultPat: string;
+  defaultBranch: string;  // default: "main"
+  autoSync: boolean;      // default: false
+  repos: FolderRepo[];
+}
+
+interface FolderRepo {
+  folderPath: string;   // relative to vault root, e.g. "project-a"
   remoteUrl: string;
-  username: string;
-  pat: string;
-  branch: string;       // default: "main"
-  autoSync: boolean;    // default: false
+  username?: string;    // overrides defaultUsername if set
+  pat?: string;         // overrides defaultPat if set
+  branch?: string;      // overrides defaultBranch if set
 }
 ```
 
@@ -65,23 +73,27 @@ Entry point for all sync operations. Wires the other three modules, shows Obsidi
 
 ## 3. Sync Data Flow
 
+Sync operates on one folder at a time. When triggered from a file inside a linked folder, the orchestrator resolves which `FolderRepo` owns that file.
+
 ```text
-① Trigger       Author runs "PubObs: Sync" command  OR  file saved (if autoSync enabled)
+① Trigger       "PubObs: Sync current folder" command  OR  file saved (if autoSync enabled)
+                  → resolve active folder → look up its FolderRepo config
+                  → no matching folder: Notice "This folder is not linked to a PubObs repo" → ABORT
        ↓
-② Validate      EnvironmentValidator.check()
-                  → reads workspace.json from repo root
+② Validate      EnvironmentValidator.check(folderPath)
+                  → reads workspace.json from folder root
                   → checks app.version >= minObsidianVersion
                   → checks each requiredPlugin is installed and version >= minVersion
                   → ANY failure: red Notice with specific message → ABORT
        ↓
-③ Pull          GitService.pull()  — fetch latest before staging to minimise conflicts
+③ Pull          GitService.pull(folderRepo)  — fetch latest before staging
        ↓
-④ Stage         GitService.stage() — all modified .md files + assets in vault
+④ Stage         GitService.stage(folderPath) — all modified .md files + assets inside folder
        ↓
 ⑤ Commit        GitService.commit("pubobs: sync <ISO timestamp>")
                   → skip if nothing staged (no empty commits)
        ↓
-⑥ Push          GitService.push()
+⑥ Push          GitService.push(folderRepo)
                   → success: green Notice with short commit hash
                   → auth failure: red Notice linking to PubObs settings
 ```
@@ -94,28 +106,35 @@ Entry point for all sync operations. Wires the other three modules, shows Obsidi
 
 Settings tab inside **Obsidian → Settings → PubObs**, three sections:
 
-### Git Remote
+### Default Credentials
 
-- Remote URL (text, placeholder: `https://gogs.example.com/team/vault.git`)
+Shared defaults applied to all repos unless overridden per-folder:
+
 - Username (text)
-- Branch (text, default: `main`)
 - Personal Access Token (password input, masked)
-- "Test connection" button → inline Connected ✓ / Failed ✗ indicator
+- Default branch (text, default: `main`)
+
+### Linked Folders
+
+A list of registered folder→repo mappings. Each row shows:
+
+- Folder path (relative to vault root)
+- Remote URL
+- Status badge: Connected ✓ / Unreachable ✗ / Not cloned
+- Optional per-folder username / PAT / branch override (collapsed by default)
+- "Remove" button
+
+"Add folder" button opens a form: folder picker + remote URL + optional credential overrides + "Clone / Initialize" action.
 
 ### Sync
 
-- Auto-sync on save (toggle, default off)
-
-### Environment
-
-- workspace.json status badge (Valid / Invalid / Missing)
-- Per-requirement breakdown (Obsidian version, each plugin)
+- Auto-sync on save (toggle, default off — applies to all linked folders)
 
 ---
 
 ## 5. workspace.json Manifest
 
-Lives at the repository root. Authors create and maintain it manually (Phase 6 adds tooling).
+Lives at the linked folder root (not vault root). Authors create and maintain it manually per folder (Phase 6 adds tooling).
 
 ```json
 {
