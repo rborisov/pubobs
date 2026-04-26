@@ -9,7 +9,8 @@
 
 Phase 1 delivers the Obsidian plugin that lets authors push their vault notes to a central Git repository. Reviewers and the frontend (Phases 3–4) read from that repository. No snapshot rendering in this phase — that is Phase 2.
 
-**Key decisions:**
+Key decisions:
+
 - Git library: `isomorphic-git` (pure JS, no binary dependency, cross-platform)
 - Remote: any HTTPS Git host — Gogs, GitHub, GitLab, bare repo — configured per-vault in settings
 - Auth: HTTPS + Personal Access Token
@@ -22,10 +23,14 @@ Phase 1 delivers the Obsidian plugin that lets authors push their vault notes to
 
 Four focused modules wired by a thin orchestrator.
 
+**Vault / repo relationship:** The Obsidian vault directory is the Git working tree root (`.git/` lives at vault root). On first use the author clones the remote into an empty vault directory, or runs "Initialize repo" from the command palette to `git init` an existing vault and add the remote.
+
 ### SettingsManager
+
 Extends Obsidian's `Plugin.loadData()` / `saveData()`. Owns the settings data model and renders the settings tab in Obsidian's Settings panel.
 
-**Settings model:**
+Settings model:
+
 ```ts
 interface PubObsSettings {
   remoteUrl: string;
@@ -37,13 +42,15 @@ interface PubObsSettings {
 ```
 
 ### EnvironmentValidator
+
 Reads `workspace.json` from the root of the local repo clone. Compares the manifest requirements against the live Obsidian environment. Returns a typed result listing all failures (not just the first).
 
 ### GitService
+
 Thin wrapper around `isomorphic-git` + its `@isomorphic-git/http-node` plugin. Exposes five methods:
 
 | Method | Description |
-|---|---|
+| --- | --- |
 | `clone()` | Initial clone of the remote into the vault directory |
 | `pull()` | Fetch + merge latest from remote before staging |
 | `stage(files)` | Add modified `.md` files and assets; respects `.gitignore` |
@@ -51,13 +58,14 @@ Thin wrapper around `isomorphic-git` + its `@isomorphic-git/http-node` plugin. E
 | `push()` | Push to remote using HTTPS + PAT from settings |
 
 ### SyncOrchestrator
+
 Entry point for all sync operations. Wires the other three modules, shows Obsidian `Notice` feedback at each step, and registers the file-watcher for auto-sync.
 
 ---
 
 ## 3. Sync Data Flow
 
-```
+```text
 ① Trigger       Author runs "PubObs: Sync" command  OR  file saved (if autoSync enabled)
        ↓
 ② Validate      EnvironmentValidator.check()
@@ -86,17 +94,20 @@ Entry point for all sync operations. Wires the other three modules, shows Obsidi
 
 Settings tab inside **Obsidian → Settings → PubObs**, three sections:
 
-**Git Remote**
+### Git Remote
+
 - Remote URL (text, placeholder: `https://gogs.example.com/team/vault.git`)
 - Username (text)
 - Branch (text, default: `main`)
 - Personal Access Token (password input, masked)
 - "Test connection" button → inline Connected ✓ / Failed ✗ indicator
 
-**Sync**
+### Sync
+
 - Auto-sync on save (toggle, default off)
 
-**Environment**
+### Environment
+
 - workspace.json status badge (Valid / Invalid / Missing)
 - Per-requirement breakdown (Obsidian version, each plugin)
 
@@ -118,10 +129,12 @@ Lives at the repository root. Authors create and maintain it manually (Phase 6 a
 ```
 
 | Field | Purpose |
-|---|---|
+| --- | --- |
 | `minObsidianVersion` | Minimum Obsidian app version; compared via semver against `app.version` |
 | `requiredPlugins` | List of plugins that must be installed and enabled; `id` matches plugin folder name |
 | `snapshotFormat` | Reserved for Phase 2; read but not enforced in Phase 1 |
+
+Assets are defined as any file in the vault that is not `.md` and not excluded by `.gitignore` (e.g. images, PDFs, attachments).
 
 ---
 
@@ -130,7 +143,7 @@ Lives at the repository root. Authors create and maintain it manually (Phase 6 a
 Hard block — sync is refused until the author resolves the issue.
 
 | Condition | Notice text |
-|---|---|
+| --- | --- |
 | `workspace.json` missing | "PubObs: workspace.json not found in repo root. Create it to enable sync." |
 | Obsidian version too old | "PubObs: Obsidian 1.4.0+ required. You have 1.3.2. Please upgrade before syncing." |
 | Plugin not installed | "PubObs: Plugin 'dataview' is required but not installed." |
@@ -140,7 +153,7 @@ Hard block — sync is refused until the author resolves the issue.
 
 ## 7. File Structure
 
-```
+```text
 obsidian-plugin/
   src/
     main.ts               # Plugin entry point, registers commands + settings tab
@@ -162,7 +175,8 @@ obsidian-plugin/
 
 **Stack:** Jest + TypeScript. Obsidian API stubbed with a lightweight mock.
 
-**Unit tests — EnvironmentValidator (`validator.test.ts`):**
+### Unit tests — EnvironmentValidator (`validator.test.ts`)
+
 - Valid environment passes
 - Obsidian version below minimum → version error
 - Required plugin not installed → missing-plugin error
@@ -170,7 +184,8 @@ obsidian-plugin/
 - `workspace.json` missing → missing-manifest error
 - Multiple failures all reported (not just first)
 
-**Integration tests — GitService (`git.test.ts`):**
+### Integration tests — GitService (`git.test.ts`)
+
 - `clone()` creates local working copy (local bare repo in `beforeAll`)
 - `pull()` fetches new commits from remote
 - `stage()` adds modified `.md` files and assets
@@ -178,7 +193,8 @@ obsidian-plugin/
 - `push()` with valid token succeeds; invalid token throws auth error
 - Nothing staged → commit skipped
 
-**Manual checklist:**
+### Manual checklist
+
 - [ ] Settings tab renders correctly in Obsidian
 - [ ] "Test connection" shows Connected / Failed correctly
 - [ ] "Sync" command appears in command palette and runs
