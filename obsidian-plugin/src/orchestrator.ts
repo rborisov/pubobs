@@ -55,7 +55,9 @@ export class SyncOrchestrator {
 
     try {
       new Notice(`PubObs: Syncing ${repo.folderPath}…`);
-      await this.git.pull(repo);
+      if (await this.git.hasCommits(repo)) {
+        await this.git.pull(repo);
+      }
       const staged = await this.git.stage(repo);
       const timestamp = new Date().toISOString();
       const sha = await this.git.commit(repo, `pubobs: sync ${timestamp}`);

@@ -45,6 +45,15 @@ export class GitService {
     });
   }
 
+  async hasCommits(repo: FolderRepo): Promise<boolean> {
+    try {
+      const log = await git.log({ fs: this.fsImpl, dir: this.repoDir(repo), depth: 1 });
+      return log.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   async pull(repo: FolderRepo): Promise<void> {
     const { username, password } = this.resolveAuth(repo);
     await git.pull({
