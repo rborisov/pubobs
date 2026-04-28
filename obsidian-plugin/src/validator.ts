@@ -40,9 +40,12 @@ export class EnvironmentValidator {
     }
 
     const errors: ValidationError[] = [];
-    const currentVersion = (this.app as any).version as string;
+    const currentVersion: string =
+      (this.app as any).version ??
+      (this.app as any).vault?.adapter?.app?.version ??
+      '';
 
-    if (!semverGte(currentVersion, manifest.minObsidianVersion)) {
+    if (currentVersion && !semverGte(currentVersion, manifest.minObsidianVersion)) {
       errors.push({
         type: 'obsidian-version',
         message: `PubObs: Obsidian ${manifest.minObsidianVersion}+ required. You have ${currentVersion}. Please upgrade before syncing.`,
@@ -72,8 +75,8 @@ export class EnvironmentValidator {
 }
 
 function semverGte(a: string, b: string): boolean {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
+  const pa = (a ?? '0').split('.').map(Number);
+  const pb = (b ?? '0').split('.').map(Number);
   for (let i = 0; i < 3; i++) {
     if ((pa[i] ?? 0) > (pb[i] ?? 0)) return true;
     if ((pa[i] ?? 0) < (pb[i] ?? 0)) return false;
