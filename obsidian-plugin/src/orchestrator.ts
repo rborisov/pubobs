@@ -61,12 +61,12 @@ export class SyncOrchestrator {
       const staged = await this.git.stage(repo);
       const timestamp = new Date().toISOString();
       const sha = await this.git.commit(repo, `pubobs: sync ${timestamp}`);
-      if (!sha) {
+      await this.git.push(repo);
+      if (!sha && staged.length === 0) {
         new Notice('PubObs: Nothing to sync.');
         return;
       }
-      await this.git.push(repo);
-      new Notice(`PubObs: Synced ${staged.length} file(s) — ${sha.slice(0, 7)}`);
+      new Notice(`PubObs: Synced ${staged.length} file(s)${sha ? ` — ${sha.slice(0, 7)}` : ''}`);
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
       if (/401|403|auth/i.test(msg)) {
