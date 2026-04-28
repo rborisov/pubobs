@@ -30,8 +30,14 @@ export class GitService {
     return repo.branch ?? this.settings.defaultBranch;
   }
 
-  async clone(repo: FolderRepo): Promise<void> {
+  private basicAuthHeaders(repo: FolderRepo): Record<string, string> {
     const { username, password } = this.resolveAuth(repo);
+    if (!username && !password) return {};
+    const token = Buffer.from(`${username}:${password}`).toString('base64');
+    return { Authorization: `Basic ${token}` };
+  }
+
+  async clone(repo: FolderRepo): Promise<void> {
     const dir = this.repoDir(repo);
     await fsp.mkdir(dir, { recursive: true });
     await git.clone({
@@ -41,7 +47,7 @@ export class GitService {
       url: repo.remoteUrl,
       ref: this.resolveBranch(repo),
       singleBranch: true,
-      onAuth: () => ({ username, password }),
+      headers: this.basicAuthHeaders(repo),
     });
   }
 
@@ -55,14 +61,14 @@ export class GitService {
   }
 
   async pull(repo: FolderRepo): Promise<void> {
-    const { username, password } = this.resolveAuth(repo);
+    const { username } = this.resolveAuth(repo);
     await git.pull({
       fs: this.fsImpl,
       http: this.httpImpl,
       dir: this.repoDir(repo),
       ref: this.resolveBranch(repo),
       singleBranch: true,
-      onAuth: () => ({ username, password }),
+      headers: this.basicAuthHeaders(repo),
       author: { name: username || 'PubObs', email: username || 'pubobs@local' },
     });
   }
@@ -100,23 +106,21 @@ export class GitService {
   }
 
   async push(repo: FolderRepo): Promise<void> {
-    const { username, password } = this.resolveAuth(repo);
     await git.push({
       fs: this.fsImpl,
       http: this.httpImpl,
       dir: this.repoDir(repo),
       ref: this.resolveBranch(repo),
-      onAuth: () => ({ username, password }),
+      headers: this.basicAuthHeaders(repo),
     });
   }
 
   async testConnection(repo: FolderRepo): Promise<{ ok: boolean; message: string }> {
-    const { username, password } = this.resolveAuth(repo);
     try {
       await git.getRemoteInfo2({
         http: this.httpImpl,
         url: repo.remoteUrl,
-        onAuth: () => ({ username, password }),
+        headers: this.basicAuthHeaders(repo),
       });
       return { ok: true, message: 'Connected' };
     } catch (e) {
