@@ -150,6 +150,15 @@ One row per note (upserted on sync). Git history is the version store; this row 
 | body | TEXT | |
 | created_at | DATETIME | |
 
+### `note_links`
+| Column | Type | Notes |
+|---|---|---|
+| source_note_id | TEXT FK → notes | note that contains the link |
+| target_path | TEXT | raw link target as written in Obsidian (e.g. `other-note` or `folder/note`) |
+| PK | (source_note_id, target_path) | |
+
+Populated by the backend on each sync by parsing `metadata_json.links`. Used to serve backlinks ("notes that link here") without re-parsing HTML. `target_path` is the unresolved alias — resolution to a `note.id` happens at query time by matching against `notes.path` in the same repo.
+
 ### `folder_mappings`
 | Column | Type | Notes |
 |---|---|---|
@@ -294,7 +303,35 @@ Plugin sends to `POST /api/repos/{id}/sync`:
 
 ---
 
-## 8. Error Handling
+## 8. Inter-Note Link Resolution
+
+Obsidian renders `[[other-note]]` as `<a class="internal-link" href="other-note">other-note</a>` in its HTML output. These hrefs are bare note names or paths — they don't point to any URL on the web.
+
+**Resolution strategy: frontend, at render time.**
+
+The wiki viewer intercepts all clicks on `.internal-link` elements. On click it looks up the link target against the note index (the flat list of `{path, id}` pairs already returned by `GET /api/repos/{id}/notes`):
+
+- Target found in index → navigate to `/wiki/repos/{id}/notes/{path}`
+- Target not found → show an inline tooltip: "This note hasn't been synced yet"
+
+Resolution is always current: if a linked note is synced after the linking note, the link works automatically on the next page visit — no re-sync or HTML re-render needed.
+
+**Backend: `note_links` table.**
+
+On each sync the backend parses `metadata_json.links` (inter-note link targets extracted from the `.md` file) and upserts rows into `note_links`. This powers two features:
+
+- `GET /api/repos/{id}/notes/{path}/backlinks` — "notes that link here", useful for the wiki viewer sidebar
+- Future graph view of the note network
+
+**API addition:**
+
+| Method | Path | Role required | Description |
+|---|---|---|---|
+| GET | `/api/repos/{id}/notes/{path}/backlinks` | reader+ | Notes in this repo that link to this note |
+
+---
+
+## 9. Error Handling
 
 | Scenario | HTTP status | Plugin behaviour |
 |---|---|---|
