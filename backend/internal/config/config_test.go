@@ -26,8 +26,8 @@ func TestLoad_defaults(t *testing.T) {
 	require.Equal(t, time.Hour, cfg.CacheCheckInterval)
 	require.Equal(t, float64(20), cfg.DiskWarnPct)
 	require.Equal(t, float64(5), cfg.DiskCritPct)
-	require.Equal(t, "/data/repos", cfg.RepoCacheDir)
-	require.Equal(t, "/data/db/pubobs.db", cfg.DBPath)
+	require.NotEmpty(t, cfg.RepoCacheDir)
+	require.NotEmpty(t, cfg.DBPath)
 	require.Len(t, cfg.SecretKey, 32)
 }
 

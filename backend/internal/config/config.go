@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -24,14 +25,22 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	home, _ := os.UserHomeDir()
+	defaultCacheDir := filepath.Join(home, ".pubobs", "repos")
+	defaultDBPath := filepath.Join(home, ".pubobs", "pubobs.db")
+	if _, err := os.Stat("/data"); err == nil {
+		defaultCacheDir = "/data/repos"
+		defaultDBPath = "/data/db/pubobs.db"
+	}
+
 	cfg := &Config{
 		Port:             getEnv("PUBOBS_PORT", "8080"),
 		BaseURL:          getEnv("PUBOBS_BASE_URL", ""),
 		OIDCIssuer:       getEnv("PUBOBS_OIDC_ISSUER", ""),
 		OIDCClientID:     getEnv("PUBOBS_OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: getEnv("PUBOBS_OIDC_CLIENT_SECRET", ""),
-		RepoCacheDir:     getEnv("PUBOBS_REPO_CACHE_DIR", "/data/repos"),
-		DBPath:           getEnv("PUBOBS_DB_PATH", "/data/db/pubobs.db"),
+		RepoCacheDir:     getEnv("PUBOBS_REPO_CACHE_DIR", defaultCacheDir),
+		DBPath:           getEnv("PUBOBS_DB_PATH", defaultDBPath),
 	}
 
 	if raw := os.Getenv("PUBOBS_SECRET_KEY"); raw != "" {
