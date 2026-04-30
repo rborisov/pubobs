@@ -1,0 +1,17 @@
+package api
+
+import (
+	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/config"
+	"github.com/pubobs/backend/internal/gitcache"
+	"github.com/pubobs/backend/internal/store"
+)
+
+// Deps holds all shared dependencies injected into API handlers.
+type Deps struct {
+	Store  *store.Store
+	Cache  *gitcache.Cache
+	Auth   *auth.SessionStore
+	OIDC   *auth.OIDCClient
+	Config *config.Config
+}

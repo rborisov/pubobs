@@ -1,1 +1,52 @@
 package api
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/pubobs/backend/internal/auth"
+)
+
+func BuildRouter(deps *Deps) http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	// Auth (unauthenticated)
+	r.Get("/auth/plugin", handlePluginAuth(deps))
+	r.Get("/auth/callback", handleAuthCallback(deps))
+	r.Post("/auth/token", handleToken(deps))
+	r.Post("/auth/refresh", handleRefresh(deps))
+
+	// Authenticated routes
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAuth(deps.Config.SecretKey))
+
+		r.Get("/api/me", handleMe(deps))
+		r.Get("/api/me/folder-mappings", handleListFolderMappings(deps))
+		r.Put("/api/me/folder-mappings/{repoID}", handleUpsertFolderMapping(deps))
+		r.Get("/api/repos", handleListRepos(deps))
+
+		r.Post("/api/repos/{id}/sync", handleSync(deps))
+		r.Get("/api/repos/{id}/files", handleListFiles(deps))
+		r.Get("/api/repos/{id}/notes", handleListNotes(deps))
+		r.Get("/api/repos/{id}/notes/*", handleNoteGet(deps))
+		r.Post("/api/repos/{id}/notes/*", handleNotePost(deps))
+
+		// Admin (instance_admin only)
+		r.Get("/api/admin/health", handleAdminHealth(deps))
+		r.Post("/api/admin/repos", handleAdminCreateRepo(deps))
+		r.Put("/api/admin/repos/{id}", handleAdminUpdateRepo(deps))
+		r.Delete("/api/admin/repos/{id}", handleAdminDeleteRepo(deps))
+		r.Post("/api/admin/repos/{id}/access", handleAdminGrantAccess(deps))
+		r.Delete("/api/admin/repos/{id}/access/{accessID}", handleAdminRevokeAccess(deps))
+		r.Get("/api/admin/users", handleAdminListUsers(deps))
+		r.Post("/api/admin/groups", handleAdminCreateGroup(deps))
+		r.Post("/api/admin/groups/{id}/members", handleAdminAddGroupMember(deps))
+	})
+
+	r.Handle("/*", http.FileServer(http.FS(frontendFS)))
+
+	return r
+}
