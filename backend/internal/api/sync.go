@@ -41,6 +41,11 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		if h, err := deps.Store.GetHealth(r.Context()); err == nil && h.DiskStatus == "crit" {
+			writeError(w, http.StatusInsufficientStorage, "disk critically low — sync rejected")
+			return
+		}
+
 		var payload struct {
 			Files []syncFilePayload `json:"files"`
 		}

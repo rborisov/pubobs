@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/frontend"
 )
 
 func BuildRouter(deps *Deps) http.Handler {
@@ -46,7 +47,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Post("/api/admin/groups/{id}/members", handleAdminAddGroupMember(deps))
 	})
 
-	r.Handle("/*", http.FileServer(http.FS(frontendFS)))
+	r.Handle("/*", http.FileServer(http.FS(frontend.FS())))
 
 	return r
 }

@@ -1,0 +1,18 @@
+services:
+  pubobs:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/db:/data/db
+      - ./data/repos:/data/repos
+    environment:
+      PUBOBS_BASE_URL: http://localhost:8080
+      PUBOBS_OIDC_ISSUER: ${PUBOBS_OIDC_ISSUER}
+      PUBOBS_OIDC_CLIENT_ID: ${PUBOBS_OIDC_CLIENT_ID}
+      PUBOBS_OIDC_CLIENT_SECRET: ${PUBOBS_OIDC_CLIENT_SECRET}
+      PUBOBS_SECRET_KEY: ${PUBOBS_SECRET_KEY}
+      PUBOBS_REPO_CACHE_TTL: 24h
+      PUBOBS_CACHE_CHECK_INTERVAL: 1h
+      PUBOBS_DISK_WARN_PCT: 20
+      PUBOBS_DISK_CRIT_PCT: 5
