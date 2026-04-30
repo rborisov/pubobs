@@ -1,1 +1,29 @@
 package db
+
+import (
+	"database/sql"
+	_ "embed"
+	"fmt"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed migrations/001_init.sql
+var schema string
+
+func Open(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1) // SQLite is single-writer
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+	return db, nil
+}
