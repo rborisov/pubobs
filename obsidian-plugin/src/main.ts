@@ -1,35 +1,82 @@
-import { Plugin } from 'obsidian';
-import { SettingsManager, PubObsSettingTab } from './settings';
-import { SyncOrchestrator } from './orchestrator';
+import { Plugin, Notice } from 'obsidian';
+import { BackendClient } from './client';
+import { AuthFlow } from './auth';
+import { SyncManager } from './sync';
+import { PubObsSettingTab } from './settings';
+import { DEFAULT_SETTINGS } from './types';
+import type { PubObsSettings, RepoInfo } from './types';
 
 export default class PubObsPlugin extends Plugin {
-  settingsManager!: SettingsManager;
-  orchestrator!: SyncOrchestrator;
+  settings!: PubObsSettings;
+  client!: BackendClient;
+  authFlow!: AuthFlow;
+  syncManager!: SyncManager;
+  private settingTab!: PubObsSettingTab;
 
   async onload(): Promise<void> {
-    this.settingsManager = new SettingsManager(this);
-    await this.settingsManager.load();
+    await this.loadSettings();
 
-    const vaultPath = (this.app.vault.adapter as any).basePath as string;
-    this.orchestrator = new SyncOrchestrator(this.app, this.settingsManager, vaultPath);
+    this.client = new BackendClient(this.settings, () => this.saveSettings());
+    this.authFlow = new AuthFlow(this.client, () => this.settings.backendUrl);
+    this.syncManager = new SyncManager(this.app, this.client, this.settings, () => this.saveSettings());
 
-    this.addCommand({
-      id: 'sync-current-folder',
-      name: 'Sync current folder',
-      callback: () => { void this.orchestrator.syncCurrentFile(); },
+    this.registerObsidianProtocolHandler('pubobs-callback', async params => {
+      await this.authFlow.handleCallback(
+        params,
+        async () => {
+          await this.saveSettings();
+          new Notice('PubObs: signed in successfully');
+          await this.refreshRepoList();
+          this.settingTab.display();
+        },
+        msg => new Notice(`PubObs auth error: ${msg}`),
+      );
     });
 
-    this.addSettingTab(new PubObsSettingTab(this.app, this));
+    this.addCommand({
+      id: 'sync-all',
+      name: 'Sync all repos',
+      callback: async () => {
+        const repoIds = Object.keys(this.settings.repoMappings);
+        if (repoIds.length === 0) {
+          new Notice('PubObs: no repos configured — open Settings to add one');
+          return;
+        }
+        for (const id of repoIds) {
+          try {
+            await this.syncManager.syncRepo(id);
+          } catch (e: unknown) {
+            new Notice(`PubObs sync failed (${id}): ` + (e instanceof Error ? e.message : String(e)));
+          }
+        }
+      },
+    });
 
-    if (this.settingsManager.settings.autoSync) {
-      this.registerEvent(
-        this.app.vault.on('modify', file => {
-          const repo = this.orchestrator.resolveFolderForFile(file.path);
-          if (repo) void this.orchestrator.syncFolder(repo);
-        }),
-      );
-    }
+    this.settingTab = new PubObsSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
   }
 
-  async onunload(): Promise<void> {}
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  async refreshRepoList(): Promise<void> {
+    const repos: RepoInfo[] = await this.client.listRepos();
+    for (const repo of repos) {
+      if (!this.settings.repoMappings[repo.id]) {
+        this.settings.repoMappings[repo.id] = {
+          repoName: repo.name,
+          vaultFolder: '',
+          subfolder: '',
+        };
+      } else {
+        this.settings.repoMappings[repo.id].repoName = repo.name;
+      }
+    }
+    await this.saveSettings();
+  }
 }

@@ -8,6 +8,7 @@ export class SyncManager {
     private app: App,
     private client: BackendClient,
     private settings: PubObsSettings,
+    private saveSettings: () => Promise<void>,
   ) {}
 
   async syncRepo(repoId: string): Promise<void> {
@@ -53,6 +54,51 @@ export class SyncManager {
     console.log(`[PubObs] syncing ${syncFiles.length} notes, ${syncAssets.length} assets`);
     const result = await this.client.sync(repoId, syncFiles, syncAssets);
     new Notice(`Synced ${syncFiles.length} note(s), ${syncAssets.length} asset(s) — ${result.commit_sha.slice(0, 7)}`);
+  }
+
+  async pullRepo(repoId: string): Promise<void> {
+    const mapping = this.settings.repoMappings[repoId];
+    if (!mapping?.vaultFolder) throw new Error(`No folder mapping for repo ${repoId} — set vault folder in settings first`);
+
+    const { vaultFolder, subfolder } = mapping;
+    const files = await this.client.listFiles(repoId);
+
+    // Only pull .md notes; skip rendered assets like _pubobs/obsidian.css
+    const noteFiles = files.filter(f => f.path.endsWith('.md') && !f.path.startsWith('_pubobs/'));
+
+    const storedSHAs: Record<string, string> = this.settings.pullSHAs[repoId] ?? {};
+    let pulled = 0;
+    let skipped = 0;
+
+    for (const file of noteFiles) {
+      if (storedSHAs[file.path] === file.sha) {
+        skipped++;
+        continue;
+      }
+
+      const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+
+      // Ensure parent directory exists
+      const dir = vaultPath.split('/').slice(0, -1).join('/');
+      if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+        await this.app.vault.createFolder(dir);
+      }
+
+      const existing = this.app.vault.getAbstractFileByPath(vaultPath);
+      if (existing instanceof TFile) {
+        await this.app.vault.modify(existing, file.content);
+      } else {
+        await this.app.vault.create(vaultPath, file.content);
+      }
+
+      storedSHAs[file.path] = file.sha;
+      pulled++;
+    }
+
+    this.settings.pullSHAs[repoId] = storedSHAs;
+    await this.saveSettings();
+
+    new Notice(`PubObs: pulled ${pulled} file(s), ${skipped} unchanged`);
   }
 
   private async buildSyncFile(
