@@ -1,12 +1,13 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
 
@@ -137,48 +138,67 @@ func serveBacklinks(w http.ResponseWriter, r *http.Request, deps *Deps, claims *
 }
 
 func serveListComments(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
-	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
-	note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
-	if note == nil {
-		writeError(w, http.StatusNotFound, "note not found")
-		return
-	}
-	comments, err := deps.Store.ListComments(r.Context(), note.ID)
+	raw, err := deps.Cache.ReadRawFile(repoID, gitcache.CommentsFilePath(notePath))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list comments failed")
+		writeError(w, http.StatusInternalServerError, "read comments failed")
 		return
 	}
-	if comments == nil {
-		comments = []*model.Comment{}
+
+	type item struct {
+		AuthorName  string `json:"author_name"`
+		AuthorEmail string `json:"author_email"`
+		CreatedAt   string `json:"created_at"`
+		Body        string `json:"body"`
 	}
-	writeJSON(w, http.StatusOK, comments)
+	parsed := gitcache.ParseComments(raw)
+	out := make([]item, 0, len(parsed))
+	for _, c := range parsed {
+		out = append(out, item{
+			AuthorName:  c.AuthorName,
+			AuthorEmail: c.AuthorEmail,
+			CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			Body:        c.Body,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func serveAddComment(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
 	if err := requireRepoRole(r.Context(), deps, claims, repoID, "commentator"); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
-	if note == nil {
-		writeError(w, http.StatusNotFound, "note not found")
-		return
-	}
+
 	var body struct {
-		ParentID *string `json:"parent_id"`
-		Body     string  `json:"body"`
+		Body string `json:"body"`
 	}
-	if err := readJSON(r, &body); err != nil || body.Body == "" {
-		writeError(w, http.StatusBadRequest, "body is required")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+		writeError(w, http.StatusBadRequest, "body required")
 		return
 	}
-	comment, err := deps.Store.CreateComment(r.Context(), uuid.NewString(), note.ID, claims.UserID, body.ParentID, body.Body)
+
+	repo, err := deps.Store.GetRepo(r.Context(), repoID)
+	if err != nil || repo == nil {
+		writeError(w, http.StatusNotFound, "repo not found")
+		return
+	}
+
+	credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create comment failed")
+		writeError(w, http.StatusInternalServerError, "cred decrypt failed")
 		return
 	}
-	writeJSON(w, http.StatusCreated, comment)
+
+	user, err := deps.Store.GetUserByID(r.Context(), claims.UserID)
+	if err != nil || user == nil {
+		writeError(w, http.StatusInternalServerError, "user not found")
+		return
+	}
+
+	if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, notePath, user.Name, user.Email, body.Body); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save comment")
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 }

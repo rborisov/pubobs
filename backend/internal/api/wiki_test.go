@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pubobs/backend/internal/api"
+	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,10 +72,16 @@ func TestHandleBacklinks(t *testing.T) {
 }
 
 func TestHandleAddComment(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
 	deps := newTestDeps(t)
+	deps.Cache = gitcache.NewCache(t.TempDir())
 	seedNoteForWiki(t, deps)
 
 	ctx := context.Background()
+	// Update repo to use the bare git URL
+	deps.Store.UpdateRepo(ctx, "r1", "R", bareURL, "", "main")
 	deps.Store.GrantAccess(ctx, "a2", "r1", "user", "u1", "commentator")
 
 	body := `{"body":"Great note!"}`
