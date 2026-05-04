@@ -58,7 +58,7 @@ export class SyncManager {
 
   async pullRepo(repoId: string): Promise<void> {
     const mapping = this.settings.repoMappings[repoId];
-    if (!mapping?.vaultFolder) throw new Error(`No folder mapping for repo ${repoId} — set vault folder in settings first`);
+    if (!mapping) throw new Error(`No folder mapping for repo ${repoId}`);
 
     const { vaultFolder, subfolder } = mapping;
     const files = await this.client.listFiles(repoId);
