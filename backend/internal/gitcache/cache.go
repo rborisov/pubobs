@@ -224,7 +224,10 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 	commentsPath := CommentsFilePath(notePath)
 	fullPath := filepath.Join(dir, commentsPath)
 
-	existing, _ := os.ReadFile(fullPath)
+	existing, err := os.ReadFile(fullPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	block := FormatComment(authorName, authorEmail, body, time.Now().UTC())
 
 	var content string
