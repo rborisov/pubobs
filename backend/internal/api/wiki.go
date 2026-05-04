@@ -168,7 +168,7 @@ func serveListComments(w http.ResponseWriter, r *http.Request, deps *Deps, claim
 }
 
 func serveAddComment(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
-	if err := requireRepoRole(r.Context(), deps, claims, repoID, "commentator"); err != nil {
+	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
