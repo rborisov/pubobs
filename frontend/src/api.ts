@@ -168,6 +168,10 @@ export async function listUsers(): Promise<User[]> {
   return json<User[]>(await authedFetch('/api/admin/users'));
 }
 
+export async function importRepo(id: string): Promise<{ imported: number }> {
+  return json(await authedFetch(`/api/admin/repos/${id}/import`, { method: 'POST' }));
+}
+
 export interface PubNote {
   id: string;
   path: string;

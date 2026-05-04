@@ -1,7 +1,10 @@
 import { pubGetNote, pubListComments, addComment, type PubNoteDetail, type PubComment } from '../api';
 import { isAuthenticated } from '../auth';
+import { ensureReaderStyles } from '../reader-styles';
 
 export async function readerNoteView(repoId: string, notePath: string): Promise<HTMLElement> {
+  ensureReaderStyles();
+
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:720px;margin:0 auto;padding:40px 24px;font-family:system-ui,sans-serif';
 
@@ -25,14 +28,15 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
     note = await pubGetNote(repoId, notePath);
   } catch (e: unknown) {
     wrap.innerHTML = `
-      <a href="#/read/${repoId}" style="color:#64748b;font-size:0.875rem;text-decoration:none">← Back</a>
-      <p style="color:#c00;margin-top:16px">${e instanceof Error ? e.message : String(e)}</p>`;
+      <a href="#/read/${repoId}" class="r-muted" style="font-size:0.875rem;text-decoration:none">← Back</a>
+      <p class="r-error" style="margin-top:16px">${e instanceof Error ? e.message : String(e)}</p>`;
     return wrap;
   }
 
   const back = document.createElement('a');
   back.href = `#/read/${repoId}`;
-  back.style.cssText = 'color:#64748b;font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
+  back.className = 'r-muted';
+  back.style.cssText = 'font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
   back.textContent = '← Back';
   wrap.appendChild(back);
 
@@ -47,7 +51,8 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
   meta.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:32px;flex-wrap:wrap';
 
   const date = document.createElement('span');
-  date.style.cssText = 'font-size:0.8rem;color:#94a3b8';
+  date.className = 'r-faint';
+  date.style.fontSize = '0.8rem';
   date.textContent = note.synced_at
     ? new Date(note.synced_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
     : '';
@@ -55,8 +60,7 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
 
   for (const tag of note.tags ?? []) {
     const badge = document.createElement('span');
-    badge.style.cssText =
-      'font-size:0.7rem;padding:2px 8px;background:#f1f5f9;border-radius:999px;color:#475569';
+    badge.className = 'r-tag';
     badge.textContent = tag;
     meta.appendChild(badge);
   }
@@ -80,22 +84,20 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
 
   if (note.backlinks?.length > 0) {
     const section = document.createElement('section');
-    section.style.cssText = 'margin-top:48px;padding-top:24px;border-top:1px solid #e2e8f0';
+    section.className = 'r-border-bottom';
+    section.style.cssText = 'margin-top:48px;padding-top:24px;border-top:1px solid var(--r-border)';
 
     const blTitle = document.createElement('h2');
-    blTitle.style.cssText =
-      'font-size:0.875rem;font-weight:600;color:#64748b;margin:0 0 12px;' +
-      'text-transform:uppercase;letter-spacing:0.05em';
+    blTitle.className = 'r-section-heading';
     blTitle.textContent = 'Linked from';
     section.appendChild(blTitle);
 
     const blList = document.createElement('ul');
-    blList.style.cssText = 'list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px';
+    blList.className = 'r-backlink-list';
     for (const bl of note.backlinks) {
       const li = document.createElement('li');
       const a = document.createElement('a');
       a.href = `#/read/${repoId}/${bl.path}`;
-      a.style.cssText = 'color:#0f172a;font-size:0.875rem';
       a.textContent = bl.title;
       li.appendChild(a);
       blList.appendChild(li);
@@ -115,17 +117,19 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
 
 function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDetail): HTMLElement {
   const section = document.createElement('section');
-  section.style.cssText = 'margin-top:48px;padding-top:24px;border-top:1px solid #e2e8f0';
+  section.style.cssText = 'margin-top:48px;padding-top:24px;border-top:1px solid var(--r-border)';
 
   const h = document.createElement('h2');
-  h.style.cssText = 'font-size:0.875rem;font-weight:600;color:#64748b;margin:0 0 16px;text-transform:uppercase;letter-spacing:0.05em';
+  h.className = 'r-section-heading';
+  h.style.marginBottom = '16px';
   h.textContent = 'Comments';
   section.appendChild(h);
 
   const list = document.createElement('div');
   list.id = `comments-list-${note.id}`;
   list.textContent = 'Loading…';
-  list.style.cssText = 'color:#94a3b8;font-size:0.875rem';
+  list.className = 'r-faint';
+  list.style.fontSize = '0.875rem';
   section.appendChild(list);
 
   // Post form (authenticated) or sign-in prompt
@@ -134,7 +138,7 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
   if (isAuthenticated()) {
     const ta = document.createElement('textarea');
     ta.placeholder = 'Write a comment…';
-    ta.style.cssText = 'width:100%;padding:10px;border:1px solid #e2e8f0;border-radius:6px;font-size:0.875rem;resize:vertical;min-height:80px;font-family:inherit;box-sizing:border-box';
+    ta.className = 'r-form-input';
     formWrap.appendChild(ta);
 
     const row = document.createElement('div');
@@ -142,11 +146,12 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
 
     const btn = document.createElement('button');
     btn.textContent = 'Post comment';
-    btn.style.cssText = 'padding:8px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem';
+    btn.className = 'r-btn-primary';
     row.appendChild(btn);
 
     const err = document.createElement('span');
-    err.style.cssText = 'color:#c00;font-size:0.8rem';
+    err.className = 'r-error';
+    err.style.fontSize = '0.8rem';
     row.appendChild(err);
     formWrap.appendChild(row);
 
@@ -167,8 +172,9 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
     });
   } else {
     const p = document.createElement('p');
-    p.style.cssText = 'font-size:0.875rem;color:#64748b';
-    p.innerHTML = `<a href="#/login" style="color:#2563eb">Sign in</a> to leave a comment.`;
+    p.className = 'r-muted';
+    p.style.fontSize = '0.875rem';
+    p.innerHTML = `<a href="#/login" class="r-link">Sign in</a> to leave a comment.`;
     formWrap.appendChild(p);
   }
   section.appendChild(formWrap);
@@ -182,15 +188,16 @@ async function loadComments(repoId: string, notePath: string, list: HTMLElement)
     comments = await pubListComments(repoId, notePath);
   } catch {
     list.textContent = 'Could not load comments.';
-    list.style.color = '#c00';
+    list.className = 'r-error';
     return;
   }
 
   list.textContent = '';
-  list.style.color = '';
+  list.className = '';
 
   if (comments.length === 0) {
-    list.style.cssText = 'color:#94a3b8;font-size:0.875rem';
+    list.className = 'r-faint';
+    list.style.fontSize = '0.875rem';
     list.textContent = 'No comments yet.';
     return;
   }
@@ -198,17 +205,17 @@ async function loadComments(repoId: string, notePath: string, list: HTMLElement)
   list.style.cssText = 'display:flex;flex-direction:column;gap:12px';
   for (const c of comments) {
     const card = document.createElement('div');
-    card.style.cssText = 'padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px';
+    card.className = 'r-comment-card';
 
     const meta = document.createElement('div');
     meta.style.cssText = 'display:flex;gap:8px;align-items:baseline;margin-bottom:6px';
     meta.innerHTML = `
-      <span style="font-size:0.8rem;font-weight:600;color:#0f172a">${esc(c.author_name || c.author_email)}</span>
-      <span style="font-size:0.75rem;color:#94a3b8">${new Date(c.created_at).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' })}</span>
+      <span class="r-comment-author">${esc(c.author_name || c.author_email)}</span>
+      <span class="r-comment-date">${new Date(c.created_at).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' })}</span>
     `;
 
     const body = document.createElement('div');
-    body.style.cssText = 'font-size:0.875rem;color:#1a1a1a';
+    body.className = 'r-comment-body';
     body.innerHTML = renderCommentBody(c.body);
 
     card.appendChild(meta);
