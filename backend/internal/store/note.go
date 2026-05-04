@@ -110,6 +110,11 @@ func (s *Store) UpsertNoteLinks(ctx context.Context, sourceNoteID string, target
 	return nil
 }
 
+func (s *Store) DeleteNote(ctx context.Context, repoID, path string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM notes WHERE repo_id=? AND path=?`, repoID, path)
+	return err
+}
+
 // GetBacklinks returns notes (in the same repo) that link to targetPath.
 func (s *Store) GetBacklinks(ctx context.Context, repoID, targetPath string) ([]*model.Note, error) {
 	rows, err := s.db.QueryContext(ctx, `

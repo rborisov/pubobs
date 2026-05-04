@@ -16,32 +16,54 @@ export class SyncManager {
     if (!mapping) throw new Error(`No folder mapping for repo ${repoId}`);
 
     const { vaultFolder, subfolder } = mapping;
-    const files = this.app.vault
+    const vaultFiles = this.app.vault
       .getFiles()
       .filter((f: TFile) => f.extension === 'md' && (vaultFolder === '' || f.path.startsWith(vaultFolder + '/')));
 
-    const notice = new Notice(`Rendering 0 / ${files.length}…`, 0);
-    const syncFiles: SyncFile[] = [];
-    const assetMap = new Map<string, ArrayBuffer>(); // vault path → binary (deduplicated)
-    const notePlugins: Record<string, string[]> = {};
+    const storedHashes: Record<string, string> = { ...(this.settings.syncHashes[repoId] ?? {}) };
+    const newHashes: Record<string, string> = {};
+    const currentRepoPaths = new Set<string>();
 
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      notice.setMessage(`Rendering ${i + 1} / ${files.length}: ${f.basename}…`);
+    const notice = new Notice(`Checking ${vaultFiles.length} note(s)…`, 0);
+    const syncFiles: SyncFile[] = [];
+    const assetMap = new Map<string, ArrayBuffer>();
+    const notePlugins: Record<string, string[]> = {};
+    let skipped = 0;
+
+    for (let i = 0; i < vaultFiles.length; i++) {
+      const f = vaultFiles[i];
       try {
         const content = await this.app.vault.read(f);
-        const used = detectPlugins(content);
-        const { syncFile, assets } = await this.buildSyncFile(f, vaultFolder, subfolder, repoId);
-        syncFiles.push(syncFile);
-        if (used.length > 0) notePlugins[syncFile.path] = used;
-        for (const [vaultPath, buf] of assets) {
-          assetMap.set(vaultPath, buf);
+
+        let relative = f.path;
+        if (vaultFolder && relative.startsWith(vaultFolder + '/')) {
+          relative = relative.slice(vaultFolder.length + 1);
         }
+        const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
+        currentRepoPaths.add(repoPath);
+
+        const hash = fnv1a(content);
+        newHashes[repoPath] = hash;
+
+        if (storedHashes[repoPath] === hash) {
+          skipped++;
+          continue;
+        }
+
+        notice.setMessage(`Rendering ${syncFiles.length + 1}: ${f.basename}…`);
+        const used = detectPlugins(content);
+        const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId);
+        syncFiles.push(syncFile);
+        if (used.length > 0) notePlugins[repoPath] = used;
+        for (const [vaultPath, buf] of assets) assetMap.set(vaultPath, buf);
       } catch (e) {
         console.error(`[PubObs] render failed for ${f.path}: ${e}`);
       }
     }
     notice.hide();
+
+    // Paths that were previously synced but no longer exist in the vault
+    const deletedPaths = Object.keys(storedHashes).filter(p => !currentRepoPaths.has(p));
 
     const syncAssets: SyncAsset[] = Array.from(assetMap.entries()).map(([vaultPath, buf]) => ({
       path: this.assetRepoPath(vaultPath, vaultFolder, subfolder),
@@ -61,9 +83,20 @@ export class SyncManager {
       content: bufferToBase64(new TextEncoder().encode(notePluginsJson(notePlugins)).buffer),
     });
 
-    console.log(`[PubObs] syncing ${syncFiles.length} notes, ${syncAssets.length} assets`);
-    const result = await this.client.sync(repoId, syncFiles, syncAssets);
-    new Notice(`Synced ${syncFiles.length} note(s), ${syncAssets.length} asset(s) — ${result.commit_sha.slice(0, 7)}`);
+    if (syncFiles.length === 0 && deletedPaths.length === 0) {
+      new Notice(`PubObs: nothing changed (${skipped} note(s) up to date)`);
+      return;
+    }
+
+    console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged`);
+    const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
+
+    // Persist hashes only after a successful sync
+    for (const p of deletedPaths) delete newHashes[p];
+    this.settings.syncHashes[repoId] = newHashes;
+    await this.saveSettings();
+
+    new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged — ${result.commit_sha.slice(0, 7)}`);
   }
 
   async pullRepo(repoId: string): Promise<void> {
@@ -122,11 +155,11 @@ export class SyncManager {
 
   private async buildSyncFile(
     file: TFile,
+    content: string,
     vaultFolder: string,
     subfolder: string,
     repoId: string,
   ): Promise<{ syncFile: SyncFile; assets: Map<string, ArrayBuffer> }> {
-    const content = await this.app.vault.read(file);
     const cache = this.app.metadataCache.getFileCache(file);
     const { position: _pos, ...frontmatter } = ((cache?.frontmatter ?? {}) as Record<string, unknown>);
 
@@ -154,6 +187,16 @@ export class SyncManager {
     }
     return p;
   }
+}
+
+// FNV-1a 32-bit hash — fast, good enough for change detection
+function fnv1a(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(36);
 }
 
 function bufferToBase64(buf: ArrayBuffer): string {

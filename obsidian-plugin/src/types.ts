@@ -5,6 +5,7 @@ export interface PubObsSettings {
   tokenExpiresAt: number; // Unix seconds; 0 = not set
   repoMappings: Record<string, RepoMapping>; // repoId → mapping
   pullSHAs: Record<string, Record<string, string>>; // repoId → filePath → sha
+  syncHashes: Record<string, Record<string, string>>; // repoId → repoPath → content hash
 }
 
 export interface RepoMapping {
@@ -39,4 +40,5 @@ export const DEFAULT_SETTINGS: PubObsSettings = {
   tokenExpiresAt: 0,
   repoMappings: {},
   pullSHAs: {},
+  syncHashes: {},
 };

@@ -53,8 +53,9 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		}
 
 		var payload struct {
-			Files  []syncFilePayload  `json:"files"`
-			Assets []syncAssetPayload `json:"assets"`
+			Files        []syncFilePayload  `json:"files"`
+			Assets       []syncAssetPayload `json:"assets"`
+			DeletedPaths []string           `json:"deleted_paths"`
 		}
 		if err := readJSON(r, &payload); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -107,6 +108,9 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			metaJSON, _ := json.Marshal(meta)
 			deps.Store.UpsertSnapshot(r.Context(), note.ID, "", string(metaJSON), claims.UserID, sha)
 			deps.Store.UpsertNoteLinks(r.Context(), note.ID, meta.Links)
+		}
+		for _, p := range payload.DeletedPaths {
+			deps.Store.DeleteNote(r.Context(), repoID, p)
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)
 

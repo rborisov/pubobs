@@ -95,12 +95,12 @@ export class BackendClient {
     return resp.json as TokenResponse;
   }
 
-  async sync(repoId: string, files: SyncFile[], assets: SyncAsset[]): Promise<{ commit_sha: string }> {
+  async sync(repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[]): Promise<{ commit_sha: string }> {
     return this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/sync`,
       method: 'POST',
       contentType: 'application/json',
-      body: JSON.stringify({ files, assets }),
+      body: JSON.stringify({ files, assets, deleted_paths: deletedPaths }),
     });
   }
 
