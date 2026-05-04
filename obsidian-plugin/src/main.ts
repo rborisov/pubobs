@@ -85,6 +85,13 @@ export default class PubObsPlugin extends Plugin {
 
   async refreshRepoList(): Promise<void> {
     const repos: RepoInfo[] = await this.client.listRepos();
+    const liveIds = new Set(repos.map(r => r.id));
+
+    // Remove mappings for repos that no longer exist in the backend
+    for (const id of Object.keys(this.settings.repoMappings)) {
+      if (!liveIds.has(id)) delete this.settings.repoMappings[id];
+    }
+
     for (const repo of repos) {
       if (!this.settings.repoMappings[repo.id]) {
         this.settings.repoMappings[repo.id] = {
