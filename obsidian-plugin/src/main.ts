@@ -52,6 +52,25 @@ export default class PubObsPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'pull-all',
+      name: 'Pull all repos',
+      callback: async () => {
+        const repoIds = Object.keys(this.settings.repoMappings);
+        if (repoIds.length === 0) {
+          new Notice('PubObs: no repos configured — open Settings to add one');
+          return;
+        }
+        for (const id of repoIds) {
+          try {
+            await this.syncManager.pullRepo(id);
+          } catch (e: unknown) {
+            new Notice(`PubObs pull failed (${id}): ` + (e instanceof Error ? e.message : String(e)));
+          }
+        }
+      },
+    });
+
     this.settingTab = new PubObsSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
   }
