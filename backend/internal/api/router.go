@@ -9,6 +9,13 @@ import (
 	"github.com/pubobs/backend/frontend"
 )
 
+func noCacheFS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func BuildRouter(deps *Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -40,6 +47,8 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Post("/api/admin/repos", handleAdminCreateRepo(deps))
 		r.Put("/api/admin/repos/{id}", handleAdminUpdateRepo(deps))
 		r.Delete("/api/admin/repos/{id}", handleAdminDeleteRepo(deps))
+		r.Post("/api/admin/repos/{id}/import", handleAdminImportRepo(deps))
+		r.Get("/api/admin/repos/{id}/access", handleAdminListRepoAccess(deps))
 		r.Post("/api/admin/repos/{id}/access", handleAdminGrantAccess(deps))
 		r.Delete("/api/admin/repos/{id}/access/{accessID}", handleAdminRevokeAccess(deps))
 		r.Get("/api/admin/users", handleAdminListUsers(deps))
@@ -47,7 +56,12 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Post("/api/admin/groups/{id}/members", handleAdminAddGroupMember(deps))
 	})
 
-	r.Handle("/*", http.FileServer(http.FS(frontend.FS())))
+	// Public reader (no auth)
+	r.Get("/pub/{repoId}", handlePubListNotes(deps))
+	r.Get("/pub/{repoId}/notes/*", handlePubGetNote(deps))
+	r.Get("/pub/{repoId}/assets/*", handlePubGetAsset(deps))
+
+	r.Handle("/*", noCacheFS(http.FileServer(http.FS(frontend.FS()))))
 
 	return r
 }

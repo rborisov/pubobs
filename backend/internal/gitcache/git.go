@@ -134,6 +134,11 @@ func (g *GitRunner) BlobSHA(dir, path string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// RevParseHEAD returns the current HEAD commit SHA.
+func (g *GitRunner) RevParseHEAD(dir string) (string, error) {
+	return g.run(dir, "rev-parse", "HEAD")
+}
+
 // LogFile returns the commit history for a specific file path.
 func (g *GitRunner) LogFile(dir, path string) ([]model.Commit, error) {
 	out, err := g.run(dir, "log",

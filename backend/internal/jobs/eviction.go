@@ -57,8 +57,9 @@ func RunEvictionCycle(ctx context.Context, s *store.Store, cache *gitcache.Cache
 		log.Printf("eviction: disk usage check failed: %v", err)
 		return
 	}
+	const critMinBytes = 1 << 30 // 1 GiB — never crit if more than this is free
 	status := "ok"
-	if freePct < cfg.DiskCritPct {
+	if freePct < cfg.DiskCritPct && freeBytes < critMinBytes {
 		status = "crit"
 	} else if freePct < cfg.DiskWarnPct {
 		status = "warn"

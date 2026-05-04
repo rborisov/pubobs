@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,11 @@ import (
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
+
+type syncAssetPayload struct {
+	Path    string `json:"path"`
+	Content string `json:"content"` // base64-encoded binary
+}
 
 type syncFilePayload struct {
 	Path        string         `json:"path"`
@@ -47,7 +53,8 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		}
 
 		var payload struct {
-			Files []syncFilePayload `json:"files"`
+			Files  []syncFilePayload  `json:"files"`
+			Assets []syncAssetPayload `json:"assets"`
 		}
 		if err := readJSON(r, &payload); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -69,10 +76,19 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			}
 		}
 
+		cacheAssets := make([]gitcache.SyncAsset, 0, len(payload.Assets))
+		for _, a := range payload.Assets {
+			data, err := base64.StdEncoding.DecodeString(a.Content)
+			if err != nil {
+				continue // skip malformed assets
+			}
+			cacheAssets = append(cacheAssets, gitcache.SyncAsset{Path: a.Path, Content: data})
+		}
+
 		user, _ := deps.Store.GetUserByID(r.Context(), claims.UserID)
 		commitMsg := fmt.Sprintf("pubobs: sync %s by %s", time.Now().UTC().Format(time.RFC3339), user.Email)
 
-		sha, err := deps.Cache.Sync(r.Context(), repo, credJSON, cacheFiles, commitMsg)
+		sha, err := deps.Cache.Sync(r.Context(), repo, credJSON, cacheFiles, cacheAssets, commitMsg)
 		if err != nil {
 			if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "rejected") {
 				writeError(w, http.StatusConflict, "push rejected: pull first, then sync")
@@ -89,7 +105,7 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			}
 			meta := extractMetadata(f.MDContent, f.Frontmatter)
 			metaJSON, _ := json.Marshal(meta)
-			deps.Store.UpsertSnapshot(r.Context(), note.ID, f.HTMLContent, string(metaJSON), claims.UserID, sha)
+			deps.Store.UpsertSnapshot(r.Context(), note.ID, "", string(metaJSON), claims.UserID, sha)
 			deps.Store.UpsertNoteLinks(r.Context(), note.ID, meta.Links)
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)

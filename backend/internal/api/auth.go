@@ -46,7 +46,7 @@ func handleAuthCallback(deps *Deps) http.HandlerFunc {
 		}
 		authCode := deps.Auth.StoreAuthCode(user.ID, sess.CodeChallenge)
 		redirectURL := fmt.Sprintf("%s?code=%s&state=%s", sess.RedirectURI, authCode, sess.PluginState)
-		http.Redirect(w, r, redirectURL, http.StatusFound)
+		serveAuthSuccess(w, redirectURL)
 	}
 }
 
@@ -95,6 +95,23 @@ func handleRefresh(deps *Deps) http.HandlerFunc {
 		}
 		issueTokenPair(w, deps, user.ID, user.Email, user.IsInstanceAdmin)
 	}
+}
+
+func serveAuthSuccess(w http.ResponseWriter, redirectURL string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PubObs — Signed in</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:480px;margin:120px auto;padding:0 24px;color:#1a1a1a}p{color:#555}</style>
+</head>
+<body>
+  <h2>Signed in successfully</h2>
+  <p>Opening Obsidian&hellip; You can close this tab.</p>
+  <script>window.location.href = %q;</script>
+</body>
+</html>`, redirectURL)
 }
 
 func issueTokenPair(w http.ResponseWriter, deps *Deps, userID, email string, isAdmin bool) {

@@ -5,12 +5,19 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
+
+var repoIDInHTML = regexp.MustCompile(`(/pub/|#/read/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/`)
+
+func rewriteRepoID(html, repoID string) string {
+	return repoIDInHTML.ReplaceAllString(html, "${1}"+repoID+"/")
+}
 
 func handlePubListNotes(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +105,7 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		if htmlContent == "" {
 			htmlContent = snap.HTMLContent // old notes synced before git rendering
 		}
+		htmlContent = rewriteRepoID(htmlContent, repoID)
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":             note.ID,

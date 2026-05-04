@@ -209,6 +209,12 @@ func (c *Cache) ReadRawFile(repoID, filePath string) (string, error) {
 	return string(data), nil
 }
 
+// HeadSHA returns the current HEAD commit SHA of a locally cached repo.
+// Returns ("", err) if the repo hasn't been cloned yet.
+func (c *Cache) HeadSHA(repoID string) (string, error) {
+	return c.git.RevParseHEAD(c.repoDir(repoID))
+}
+
 // AppendComment appends a comment to the note's companion comments file,
 // commits the change, and pushes to the remote.
 func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, notePath, authorName, authorEmail, body string) error {
