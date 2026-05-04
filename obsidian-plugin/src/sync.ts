@@ -66,7 +66,7 @@ export class SyncManager {
     // Only pull .md notes; skip rendered assets like _pubobs/obsidian.css
     const noteFiles = files.filter(f => f.path.endsWith('.md') && !f.path.startsWith('_pubobs/'));
 
-    const storedSHAs: Record<string, string> = this.settings.pullSHAs[repoId] ?? {};
+    const storedSHAs: Record<string, string> = { ...(this.settings.pullSHAs[repoId] ?? {}) };
     let pulled = 0;
     let skipped = 0;
 
