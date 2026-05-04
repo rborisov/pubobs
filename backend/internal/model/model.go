@@ -3,11 +3,18 @@ package model
 import "time"
 
 type User struct {
-	ID              string
-	Email           string
-	Name            string
-	IsInstanceAdmin bool
-	CreatedAt       time.Time
+	ID              string    `json:"id"`
+	Email           string    `json:"email"`
+	Name            string    `json:"name"`
+	IsInstanceAdmin bool      `json:"is_instance_admin"`
+	IsBanned        bool      `json:"is_banned"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type AllowlistEntry struct {
+	ID        string    `json:"id"`
+	Pattern   string    `json:"pattern"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Group struct {

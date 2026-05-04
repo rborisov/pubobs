@@ -19,6 +19,13 @@ export interface User {
   email: string;
   name: string;
   is_instance_admin: boolean;
+  is_banned: boolean;
+}
+
+export interface AllowlistEntry {
+  id: string;
+  pattern: string;
+  created_at: string;
 }
 
 export interface Me extends User {}
@@ -170,6 +177,41 @@ export async function listUsers(): Promise<User[]> {
 
 export async function importRepo(id: string): Promise<{ imported: number }> {
   return json(await authedFetch(`/api/admin/repos/${id}/import`, { method: 'POST' }));
+}
+
+export async function setUserAdmin(id: string, admin: boolean): Promise<void> {
+  const resp = await authedFetch(`/api/admin/users/${id}/admin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admin }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setUserBanned(id: string, banned: boolean): Promise<void> {
+  const resp = await authedFetch(`/api/admin/users/${id}/ban`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ banned }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function listAllowlist(): Promise<AllowlistEntry[]> {
+  return json<AllowlistEntry[]>(await authedFetch('/api/admin/allowlist'));
+}
+
+export async function addAllowlistEntry(pattern: string): Promise<AllowlistEntry> {
+  return json(await authedFetch('/api/admin/allowlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pattern }),
+  }));
+}
+
+export async function removeAllowlistEntry(id: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/allowlist/${id}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
 export interface PubNote {

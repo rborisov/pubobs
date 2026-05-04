@@ -4,12 +4,16 @@ import { register, start, navigate } from './router';
 import { loginView } from './views/login';
 import { reposView } from './views/repos';
 import { repoDetailView } from './views/repo-detail';
+import { usersView } from './views/users';
+import { allowlistView } from './views/allowlist';
 import { readerListView } from './views/reader-list';
 import { readerNoteView } from './views/reader-note';
 
 register('/login', () => loginView());
 register('/repos', () => reposView());
 register('/repos/:id', ({ id }) => repoDetailView(id));
+register('/users', () => usersView());
+register('/allowlist', () => allowlistView());
 register('/read/:repoId', ({ repoId }) => readerListView(repoId));
 register('/read/:repoId/*', params => readerNoteView(params['repoId'], params['*'] ?? ''));
 register('/', () => {
@@ -69,6 +73,8 @@ function renderNav(app: HTMLElement): void {
   nav.innerHTML = `
     <span style="font-weight:600;font-size:1rem">PubObs Admin</span>
     <a href="#/repos" style="color:#94a3b8;text-decoration:none;font-size:0.875rem">Repos</a>
+    <a href="#/users" style="color:#94a3b8;text-decoration:none;font-size:0.875rem">Users</a>
+    <a href="#/allowlist" style="color:#94a3b8;text-decoration:none;font-size:0.875rem">Allowlist</a>
     <span style="flex:1"></span>
     <button id="signout-btn"
       style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.875rem">

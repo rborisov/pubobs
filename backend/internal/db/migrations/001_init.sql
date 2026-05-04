@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     is_instance_admin INTEGER NOT NULL DEFAULT 0,
+    is_banned         INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -88,4 +89,10 @@ CREATE TABLE IF NOT EXISTS system_health (
     disk_status      TEXT    NOT NULL DEFAULT 'ok',
     last_eviction_at DATETIME,
     checked_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS registration_allowlist (
+    id         TEXT PRIMARY KEY,
+    pattern    TEXT UNIQUE NOT NULL, -- exact email or @domain.com suffix
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

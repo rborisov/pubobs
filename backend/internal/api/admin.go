@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/model"
 )
 
 func requireAdmin(claims *auth.AccessClaims, w http.ResponseWriter) bool {
@@ -257,6 +258,105 @@ func handleAdminListUsers(deps *Deps) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, users)
+	}
+}
+
+func handleAdminSetAdmin(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Admin bool `json:"admin"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := deps.Store.SetInstanceAdmin(r.Context(), id, body.Admin); err != nil {
+			writeError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAdminSetBan(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Banned bool `json:"banned"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := deps.Store.BanUser(r.Context(), id, body.Banned); err != nil {
+			writeError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAdminListAllowlist(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		entries, err := deps.Store.ListAllowlist(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list failed")
+			return
+		}
+		if entries == nil {
+			entries = []*model.AllowlistEntry{}
+		}
+		writeJSON(w, http.StatusOK, entries)
+	}
+}
+
+func handleAdminAddAllowlistEntry(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		var body struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := readJSON(r, &body); err != nil || body.Pattern == "" {
+			writeError(w, http.StatusBadRequest, "pattern is required")
+			return
+		}
+		entry, err := deps.Store.AddAllowlistEntry(r.Context(), uuid.NewString(), body.Pattern)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "add failed")
+			return
+		}
+		writeJSON(w, http.StatusCreated, entry)
+	}
+}
+
+func handleAdminRemoveAllowlistEntry(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		id := chi.URLParam(r, "id")
+		if err := deps.Store.RemoveAllowlistEntry(r.Context(), id); err != nil {
+			writeError(w, http.StatusInternalServerError, "remove failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
