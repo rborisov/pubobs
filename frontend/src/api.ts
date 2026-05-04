@@ -4,6 +4,7 @@ export interface Repo {
   remote_url: string;
   default_branch: string;
   is_cloned: boolean;
+  role: string; // "admin" | "editor" | "commentator" | "reader"
 }
 
 export interface RepoAccess {

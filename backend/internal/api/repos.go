@@ -27,12 +27,18 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			RemoteURL     string `json:"remote_url"`
 			DefaultBranch string `json:"default_branch"`
 			IsCloned      bool   `json:"is_cloned"`
+			Role          string `json:"role"`
 		}
 		out := make([]repoResp, len(repos))
 		for i, repo := range repos {
+			role := "admin"
+			if !claims.IsAdmin {
+				role, _ = deps.Store.GetUserRole(r.Context(), claims.UserID, repo.ID)
+			}
 			out[i] = repoResp{
 				ID: repo.ID, Name: repo.Name, RemoteURL: repo.RemoteURL,
 				DefaultBranch: repo.DefaultBranch, IsCloned: repo.LocalPath != nil,
+				Role: role,
 			}
 		}
 		writeJSON(w, http.StatusOK, out)
