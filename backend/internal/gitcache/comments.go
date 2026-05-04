@@ -34,8 +34,13 @@ func FormatComment(name, email, body string, ts time.Time) string {
 // ParseComments parses the contents of a comments markdown file into structured comments.
 func ParseComments(content string) []ParsedComment {
 	parts := strings.Split(content, "\n### ")
+	start := 1
+	if strings.HasPrefix(strings.TrimLeft(parts[0], "\r\n"), "### ") {
+		parts[0] = strings.TrimPrefix(strings.TrimLeft(parts[0], "\r\n"), "### ")
+		start = 0
+	}
 	var out []ParsedComment
-	for _, part := range parts[1:] { // parts[0] is the frontmatter preamble
+	for _, part := range parts[start:] {
 		nl := strings.Index(part, "\n")
 		if nl == -1 {
 			continue

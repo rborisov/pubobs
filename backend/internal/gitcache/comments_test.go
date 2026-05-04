@@ -37,8 +37,20 @@ func TestParseComments_oneComment(t *testing.T) {
 	if c.Body != "Hello world" {
 		t.Errorf("body: got %q", c.Body)
 	}
-	if c.CreatedAt.Year() != 2026 {
-		t.Errorf("ts: got %v", c.CreatedAt)
+	wantTS := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	if !c.CreatedAt.Equal(wantTS) {
+		t.Errorf("ts: got %v, want %v", c.CreatedAt, wantTS)
+	}
+}
+
+func TestParseComments_noFrontmatter(t *testing.T) {
+	content := "### Alice | 2026-05-04T10:00:00Z | alice@example.com\n\nHello\n"
+	got := ParseComments(content)
+	if len(got) != 1 {
+		t.Fatalf("expected 1, got %d", len(got))
+	}
+	if got[0].Body != "Hello" {
+		t.Errorf("body: got %q", got[0].Body)
 	}
 }
 
@@ -67,6 +79,10 @@ func TestFormatComment_roundtrip(t *testing.T) {
 	}
 	if got[0].Body != "Hello world" {
 		t.Errorf("body: got %q", got[0].Body)
+	}
+	wantTS := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	if !got[0].CreatedAt.Equal(wantTS) {
+		t.Errorf("ts: got %v, want %v", got[0].CreatedAt, wantTS)
 	}
 }
 
