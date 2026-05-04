@@ -138,6 +138,10 @@ func serveBacklinks(w http.ResponseWriter, r *http.Request, deps *Deps, claims *
 }
 
 func serveListComments(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
+	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	raw, err := deps.Cache.ReadRawFile(repoID, gitcache.CommentsFilePath(notePath))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read comments failed")
