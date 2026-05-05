@@ -70,16 +70,17 @@ type InstallerState struct {
 }
 
 type Config struct {
-    Domain          string
-    SetupNginx      bool
-    SetupTLS        bool
-    OIDCProvider    string // google | yandex | custom
-    OIDCIssuer      string
-    OIDCClientID    string
-    OIDCClientSecret string
-    YandexClientID  string
+    Domain             string
+    AdminEmail         string
+    SetupNginx         bool
+    SetupTLS           bool
+    OIDCProvider       string // google | yandex | custom
+    OIDCIssuer         string
+    OIDCClientID       string
+    OIDCClientSecret   string
+    YandexClientID     string
     YandexClientSecret string
-    SecretKey       string // auto-generated, 32 random bytes as hex
+    SecretKey          string // auto-generated, 32 random bytes as hex
 }
 ```
 
@@ -100,10 +101,11 @@ The backend checks and returns JSON:
 
 Each check renders as a status row (green tick or "will install" badge). The **Next** button is enabled once the JSON response arrives.
 
-### Step 2 — Domain
+### Step 2 — Domain & Admin
 
 Fields:
 - **Domain** (text input, required) — e.g. `pubobs.example.com`
+- **Admin email** (text input, required) — the email address that will be auto-promoted to instance admin on first login. Must match the email in the OIDC provider account.
 - **Set up nginx + Let's Encrypt** (checkbox, default: checked)
 
 If nginx checkbox is checked, a hint appears: *"Make sure an A record for this domain points to this server before clicking Install."*
@@ -249,6 +251,35 @@ apt-get install -y certbot python3-certbot-nginx
 certbot --nginx -d {domain} --non-interactive --agree-tos --register-unsafely-without-email
 ```
 Certbot updates the nginx config to add HTTPS and sets up auto-renewal.
+
+---
+
+## Backend Changes
+
+### `PUBOBS_ADMIN_EMAIL` config field
+
+Add `AdminEmail string` to `config.Config`, loaded from `PUBOBS_ADMIN_EMAIL` env var. Optional — if empty, no auto-promotion occurs.
+
+### Auto-promotion on first login
+
+In `internal/api/auth.go`, after `UpsertUser` succeeds in the OIDC/Yandex callback, add:
+
+```go
+if cfg.AdminEmail != "" && user.Email == cfg.AdminEmail && !user.IsInstanceAdmin {
+    // Only promote if no instance admins exist yet
+    admins, _ := deps.Store.ListInstanceAdmins(ctx)
+    if len(admins) == 0 {
+        deps.Store.SetInstanceAdmin(ctx, user.ID, true)
+        user.IsInstanceAdmin = true
+    }
+}
+```
+
+Add `Store.ListInstanceAdmins(ctx) ([]*model.User, error)` — a simple query: `SELECT ... FROM users WHERE is_instance_admin=1`.
+
+### `.env` written by installer
+
+The installer writes `PUBOBS_ADMIN_EMAIL={adminEmail}` to `/opt/pubobs/backend/.env` alongside the other variables.
 
 ---
 
