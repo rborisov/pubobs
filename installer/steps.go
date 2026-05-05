@@ -145,10 +145,40 @@ func stepInstallDocker(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) 
 
 	// Ensure Compose V2 plugin is present (may be missing on older Docker installs)
 	if exec.Command("docker", "compose", "version").Run() != nil {
-		emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Installing docker-compose-plugin...\n"})
-		if err := runCmd(ch, mu, logBuf, "", "apt-get", "install", "-y", "docker-compose-plugin"); err != nil {
-			return fmt.Errorf("docker compose plugin install failed: %w", err)
+		if err := installComposePlugin(ch, mu, logBuf); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func installComposePlugin(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) error {
+	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Installing Docker Compose V2 plugin...\n"})
+
+	// Try apt — package name varies by distro/repo
+	for _, pkg := range []string{"docker-compose-plugin", "docker-compose-v2"} {
+		if exec.Command("apt-get", "install", "-y", pkg).Run() == nil {
+			return nil
+		}
+	}
+
+	// Fallback: download binary directly from GitHub releases
+	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "apt unavailable, downloading compose binary from GitHub...\n"})
+	arch := "x86_64"
+	if out, _ := exec.Command("uname", "-m").Output(); string(out) != "" {
+		arch = strings.TrimSpace(string(out))
+	}
+	pluginDir := "/usr/local/lib/docker/cli-plugins"
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		return fmt.Errorf("create plugin dir: %w", err)
+	}
+	dest := pluginDir + "/docker-compose"
+	url := "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-" + arch
+	if err := runCmd(ch, mu, logBuf, "", "curl", "-fsSL", "-o", dest, url); err != nil {
+		return fmt.Errorf("download compose: %w", err)
+	}
+	if err := os.Chmod(dest, 0755); err != nil {
+		return fmt.Errorf("chmod compose: %w", err)
 	}
 	return nil
 }
