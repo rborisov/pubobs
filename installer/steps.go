@@ -103,6 +103,7 @@ func runInstall(cfg *installerConfig, ch chan string, logBuf *strings.Builder, m
 		return
 	}
 	sectionDone(ch, mu, logBuf, "Start containers")
+	cleanupRepo(ch, mu, logBuf)
 
 	if !cfg.SetupNginx {
 		done(ch)
@@ -307,6 +308,39 @@ func skipTLS(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu *
 	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Updated .env to use http://\n"})
 	exec.Command("docker", "compose", "-f", repoDir+"/backend/docker-compose.yml", "restart").Run()
 	done(ch)
+}
+
+// cleanupRepo removes everything from the repo that isn't needed at runtime,
+// leaving only docker-compose.yml, Dockerfile, bin/, and data/.
+func cleanupRepo(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) {
+	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Cleaning up source files...\n"})
+	keep := map[string]bool{
+		"backend":  true,
+		".env":     true,
+		"data":     true,
+	}
+	_ = keep
+	for _, path := range []string{
+		repoDir + "/frontend",
+		repoDir + "/docs",
+		repoDir + "/installer",
+		repoDir + "/obsidian-plugin",
+		repoDir + "/.git",
+		repoDir + "/install.sh",
+		repoDir + "/README.md",
+		repoDir + "/.gitattributes",
+		repoDir + "/.gitignore",
+		repoDir + "/backend/cmd",
+		repoDir + "/backend/internal",
+		repoDir + "/backend/frontend",
+		repoDir + "/backend/go.mod",
+		repoDir + "/backend/go.sum",
+		repoDir + "/backend/Makefile",
+		repoDir + "/backend/server",
+	} {
+		os.RemoveAll(path)
+	}
+	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Cleanup done.\n"})
 }
 
 func checkDNS(domain string) string {
