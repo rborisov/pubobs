@@ -34,23 +34,36 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 		}
 
 		type noteItem struct {
-			ID       string `json:"id"`
-			Path     string `json:"path"`
-			Title    string `json:"title"`
-			SyncedAt string `json:"synced_at"`
+			ID       string   `json:"id"`
+			Path     string   `json:"path"`
+			Title    string   `json:"title"`
+			Tags     []string `json:"tags"`
+			SyncedAt string   `json:"synced_at"`
 		}
 
 		items := make([]noteItem, 0, len(notes))
 		for _, n := range notes {
 			snap, _ := deps.Store.GetSnapshot(r.Context(), n.ID)
 			syncedAt := ""
+			var tags []string
 			if snap != nil {
 				syncedAt = snap.SyncedAt.UTC().Format("2006-01-02T15:04:05Z")
+				var meta struct {
+					Tags []string `json:"tags"`
+				}
+				_ = json.Unmarshal([]byte(snap.MetadataJSON), &meta)
+				if meta.Tags != nil {
+					tags = meta.Tags
+				}
+			}
+			if tags == nil {
+				tags = []string{}
 			}
 			items = append(items, noteItem{
 				ID:       n.ID,
 				Path:     n.Path,
 				Title:    noteTitle(n.Path, snap),
+				Tags:     tags,
 				SyncedAt: syncedAt,
 			})
 		}

@@ -14,6 +14,14 @@ const LOGO_MARK = `
   <circle cx="26" cy="38" r="3.8" fill="#2D3F56"/>
 </svg>`.trim();
 
+interface Provider { id: string; name: string; }
+
+async function fetchProviders(): Promise<Provider[]> {
+  const res = await fetch('/auth/providers');
+  if (!res.ok) throw new Error('Failed to load providers');
+  return res.json();
+}
+
 export function loginView(): HTMLElement {
   const wrap = document.createElement('div');
   wrap.style.cssText =
@@ -24,27 +32,37 @@ export function loginView(): HTMLElement {
     <div style="display:flex;justify-content:center;margin-bottom:20px">${LOGO_MARK}</div>
     <h1 style="font-size:1.75rem;font-weight:700;margin:0 0 6px;color:#2D3F56;letter-spacing:-0.02em">PubObs</h1>
     <p style="color:#8094AF;margin:0 0 28px;font-size:0.9rem">Publish your Obsidian notes</p>
-    <button id="signin-btn"
-      style="width:100%;padding:11px 24px;background:#5B6B8E;color:#fff;border:none;border-radius:8px;
-             font-size:0.95rem;font-weight:500;cursor:pointer;transition:background 0.15s;letter-spacing:0.01em">
-      Sign in with OIDC
-    </button>
+    <div id="provider-btns"></div>
     <p id="err-msg" style="color:#c00;margin-top:16px;display:none;font-size:0.875rem"></p>
   `;
 
-  const btn = wrap.querySelector('#signin-btn') as HTMLButtonElement;
-  btn.addEventListener('mouseenter', () => { btn.style.background = '#4a5a7a'; });
-  btn.addEventListener('mouseleave', () => { btn.style.background = '#5B6B8E'; });
+  const btnsWrap = wrap.querySelector('#provider-btns') as HTMLElement;
+  const errEl = wrap.querySelector('#err-msg') as HTMLElement;
 
-  btn.addEventListener('click', async () => {
-    const errEl = wrap.querySelector('#err-msg') as HTMLElement;
-    try {
-      errEl.style.display = 'none';
-      await beginAuth();
-    } catch (e: unknown) {
-      errEl.textContent = e instanceof Error ? e.message : String(e);
-      errEl.style.display = 'block';
+  fetchProviders().then(providers => {
+    btnsWrap.innerHTML = '';
+    for (const p of providers) {
+      const btn = document.createElement('button');
+      btn.textContent = p.name;
+      btn.style.cssText =
+        'display:block;width:100%;padding:11px 24px;background:#5B6B8E;color:#fff;border:none;border-radius:8px;' +
+        'font-size:0.95rem;font-weight:500;cursor:pointer;transition:background 0.15s;letter-spacing:0.01em;margin-bottom:10px';
+      btn.addEventListener('mouseenter', () => { btn.style.background = '#4a5a7a'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = '#5B6B8E'; });
+      btn.addEventListener('click', async () => {
+        try {
+          errEl.style.display = 'none';
+          await beginAuth(p.id);
+        } catch (e: unknown) {
+          errEl.textContent = e instanceof Error ? e.message : String(e);
+          errEl.style.display = 'block';
+        }
+      });
+      btnsWrap.appendChild(btn);
     }
+  }).catch(e => {
+    errEl.textContent = e instanceof Error ? e.message : String(e);
+    errEl.style.display = 'block';
   });
 
   return wrap;

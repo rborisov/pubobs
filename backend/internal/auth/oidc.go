@@ -8,6 +8,19 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// AuthProvider is implemented by both OIDCClient and YandexClient.
+type AuthProvider interface {
+	AuthCodeURL(state string) string
+	ExchangeCode(ctx context.Context, code string) (*UserClaims, error)
+}
+
+// NamedProvider wraps an AuthProvider with a display ID and human-readable name.
+type NamedProvider struct {
+	ID     string
+	Name   string
+	Client AuthProvider
+}
+
 // UserClaims holds the identity fields extracted from an OIDC ID token.
 type UserClaims struct {
 	Subject string

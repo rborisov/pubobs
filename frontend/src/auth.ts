@@ -4,7 +4,7 @@ import { exchangeToken, applyTokenResponse, tokenStore } from './api';
 const VERIFIER_KEY = 'pubobs_pkce_verifier';
 const STATE_KEY = 'pubobs_pkce_state';
 
-export async function beginAuth(): Promise<void> {
+export async function beginAuth(providerID?: string): Promise<void> {
   const verifier = generateVerifier();
   const state = generateState();
   const challenge = await computeChallenge(verifier);
@@ -12,12 +12,13 @@ export async function beginAuth(): Promise<void> {
   sessionStorage.setItem(STATE_KEY, state);
 
   const redirectUri = encodeURIComponent(location.origin + '/');
-  const url =
+  let url =
     `/auth/plugin` +
     `?code_challenge=${encodeURIComponent(challenge)}` +
     `&code_challenge_method=S256` +
     `&redirect_uri=${redirectUri}` +
     `&state=${encodeURIComponent(state)}`;
+  if (providerID) url += `&provider=${encodeURIComponent(providerID)}`;
   location.href = url;
 }
 

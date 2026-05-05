@@ -17,7 +17,7 @@ func TestPKCEChallenge(t *testing.T) {
 func TestSessionStore_StoreAndConsume(t *testing.T) {
 	ss := auth.NewSessionStore()
 
-	sessionID := ss.StoreSession("challenge123", "http://localhost:12345/callback", "plugin-state-xyz")
+	sessionID := ss.StoreSession("challenge123", "http://localhost:12345/callback", "plugin-state-xyz", "oidc")
 	require.NotEmpty(t, sessionID)
 
 	sess, ok := ss.GetSession(sessionID)

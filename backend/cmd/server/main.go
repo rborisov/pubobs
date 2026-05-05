@@ -45,13 +45,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("init OIDC: %v", err)
 	}
+	providers := []*auth.NamedProvider{
+		{ID: "oidc", Name: "Sign in with OIDC", Client: oidcClient},
+	}
+	if cfg.YandexClientID != "" && cfg.YandexClientSecret != "" {
+		yandex := auth.NewYandexClient(cfg.YandexClientID, cfg.YandexClientSecret, cfg.BaseURL)
+		providers = append(providers, &auth.NamedProvider{ID: "yandex", Name: "Sign in with Yandex", Client: yandex})
+	}
 
 	deps := &api.Deps{
-		Store:  store.New(database),
-		Cache:  gitcache.NewCache(cfg.RepoCacheDir),
-		Auth:   auth.NewSessionStore(),
-		OIDC:   oidcClient,
-		Config: cfg,
+		Store:         store.New(database),
+		Cache:         gitcache.NewCache(cfg.RepoCacheDir),
+		Auth:          auth.NewSessionStore(),
+		OIDCProviders: providers,
+		Config:        cfg,
 	}
 
 	jobs.StartEvictionJob(ctx, deps.Store, deps.Cache, cfg)

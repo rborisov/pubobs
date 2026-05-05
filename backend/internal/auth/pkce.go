@@ -20,6 +20,7 @@ type pkceSession struct {
 	CodeChallenge string
 	RedirectURI   string
 	PluginState   string
+	ProviderID    string
 	ExpiresAt     time.Time
 }
 
@@ -53,13 +54,14 @@ func (ss *SessionStore) SetCodeTTL(d time.Duration) {
 }
 
 // StoreSession saves an incoming plugin auth request and returns a random session ID.
-func (ss *SessionStore) StoreSession(codeChallenge, redirectURI, pluginState string) string {
+func (ss *SessionStore) StoreSession(codeChallenge, redirectURI, pluginState, providerID string) string {
 	id := randomBase64(16)
 	ss.mu.Lock()
 	ss.sessions[id] = &pkceSession{
 		CodeChallenge: codeChallenge,
 		RedirectURI:   redirectURI,
 		PluginState:   pluginState,
+		ProviderID:    providerID,
 		ExpiresAt:     time.Now().Add(10 * time.Minute),
 	}
 	ss.mu.Unlock()

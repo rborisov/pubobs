@@ -219,6 +219,7 @@ export interface PubNote {
   id: string;
   path: string;
   title: string;
+  tags: string[];
   synced_at: string;
 }
 
