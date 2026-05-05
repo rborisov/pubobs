@@ -126,14 +126,31 @@ func runInstall(cfg *installerConfig, ch chan string, logBuf *strings.Builder, m
 }
 
 func stepInstallDocker(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) error {
-	if err := exec.Command("docker", "info").Run(); err == nil {
-		emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Docker already installed, skipping.\n"})
+	dockerOK := exec.Command("docker", "info").Run() == nil
+	composeOK := exec.Command("docker", "compose", "version").Run() == nil
+
+	if dockerOK && composeOK {
+		emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Docker and Compose already installed, skipping.\n"})
 		return nil
 	}
-	if err := runCmd(ch, mu, logBuf, "", "sh", "-c", "curl -fsSL https://get.docker.com | sh"); err != nil {
-		return fmt.Errorf("docker install failed: %w", err)
+
+	if !dockerOK {
+		if err := runCmd(ch, mu, logBuf, "", "sh", "-c", "curl -fsSL https://get.docker.com | sh"); err != nil {
+			return fmt.Errorf("docker install failed: %w", err)
+		}
+		if err := runCmd(ch, mu, logBuf, "", "systemctl", "enable", "--now", "docker"); err != nil {
+			return err
+		}
 	}
-	return runCmd(ch, mu, logBuf, "", "systemctl", "enable", "--now", "docker")
+
+	// Ensure Compose V2 plugin is present (may be missing on older Docker installs)
+	if exec.Command("docker", "compose", "version").Run() != nil {
+		emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Installing docker-compose-plugin...\n"})
+		if err := runCmd(ch, mu, logBuf, "", "apt-get", "install", "-y", "docker-compose-plugin"); err != nil {
+			return fmt.Errorf("docker compose plugin install failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func stepBuildApp(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) error {
