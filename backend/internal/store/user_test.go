@@ -72,3 +72,18 @@ func TestSetInstanceAdmin(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, u.IsInstanceAdmin)
 }
+
+func TestListInstanceAdmins(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	s.UpsertUser(ctx, "u1", "a@x.com", "A")
+	s.UpsertUser(ctx, "u2", "b@x.com", "B")
+	s.UpsertUser(ctx, "u3", "c@x.com", "C")
+	s.SetInstanceAdmin(ctx, "u2", true)
+
+	admins, err := s.ListInstanceAdmins(ctx)
+	require.NoError(t, err)
+	require.Len(t, admins, 1)
+	require.Equal(t, "u2", admins[0].ID)
+}

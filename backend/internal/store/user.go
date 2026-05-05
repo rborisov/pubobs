@@ -57,6 +57,24 @@ func (s *Store) SetInstanceAdmin(ctx context.Context, userID string, admin bool)
 	return err
 }
 
+func (s *Store) ListInstanceAdmins(ctx context.Context) ([]*model.User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, email, name, is_instance_admin, is_banned, created_at FROM users WHERE is_instance_admin=1`)
+	if err != nil {
+		return nil, fmt.Errorf("list admins: %w", err)
+	}
+	defer rows.Close()
+	var out []*model.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) BanUser(ctx context.Context, userID string, banned bool) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET is_banned=? WHERE id=?`, banned, userID)
