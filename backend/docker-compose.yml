@@ -1,17 +1,23 @@
 services:
   pubobs:
-    build: .
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data/db:/data/db
       - ./data/repos:/data/repos
     environment:
-      PUBOBS_BASE_URL: http://localhost:8080
+      PUBOBS_BASE_URL: ${PUBOBS_BASE_URL}
       PUBOBS_OIDC_ISSUER: ${PUBOBS_OIDC_ISSUER}
       PUBOBS_OIDC_CLIENT_ID: ${PUBOBS_OIDC_CLIENT_ID}
       PUBOBS_OIDC_CLIENT_SECRET: ${PUBOBS_OIDC_CLIENT_SECRET}
       PUBOBS_SECRET_KEY: ${PUBOBS_SECRET_KEY}
+      PUBOBS_ADMIN_EMAIL: ${PUBOBS_ADMIN_EMAIL:-}
+      PUBOBS_YANDEX_CLIENT_ID: ${PUBOBS_YANDEX_CLIENT_ID:-}
+      PUBOBS_YANDEX_CLIENT_SECRET: ${PUBOBS_YANDEX_CLIENT_SECRET:-}
       PUBOBS_REPO_CACHE_TTL: 24h
       PUBOBS_CACHE_CHECK_INTERVAL: 1h
       PUBOBS_DISK_WARN_PCT: 20
