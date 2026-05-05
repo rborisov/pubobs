@@ -194,6 +194,14 @@ func stepStartContainers(cfg *installerConfig, ch chan string, mu *sync.Mutex, l
 	}
 	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Wrote " + envPath + "\n"})
 
+	// Ensure data directories exist and are owned by the app user (uid 1000)
+	for _, dir := range []string{repoDir + "/backend/data/db", repoDir + "/backend/data/repos"} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create data dir %s: %w", dir, err)
+		}
+		os.Lchown(dir, 1000, 1000)
+	}
+
 	// Stop any existing containers first to free the port
 	downCmd := exec.Command("docker", "compose", "down")
 	downCmd.Dir = repoDir + "/backend"
