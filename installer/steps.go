@@ -194,6 +194,9 @@ func stepStartContainers(cfg *installerConfig, ch chan string, mu *sync.Mutex, l
 	}
 	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Wrote " + envPath + "\n"})
 
+	// Stop any existing containers first to free the port
+	exec.Command("docker", "compose", "-f", repoDir+"/backend/docker-compose.yml", "down").Run()
+
 	if err := runCmd(ch, mu, logBuf, repoDir+"/backend", "docker", "compose", "up", "-d"); err != nil {
 		return err
 	}
