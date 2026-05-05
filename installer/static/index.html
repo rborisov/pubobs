@@ -317,18 +317,22 @@ function step3Next() {
 }
 
 // Step 4: Review
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function renderReview() {
   const c = state.cfg;
   const rows = [
-    ['Domain', c.domain],
-    ['Admin email', c.admin_email],
+    ['Domain', esc(c.domain)],
+    ['Admin email', esc(c.admin_email)],
     ['nginx + TLS', c.setup_nginx ? 'yes' : 'no'],
-    ['Auth provider', c.oidc_provider],
-    ['Client ID', c.oidc_client_id],
+    ['Auth provider', esc(c.oidc_provider)],
+    ['Client ID', esc(c.oidc_client_id)],
     ['Client Secret', '&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;'],
     ['Secret key', '<span class="badge-generated">auto-generated</span>'],
   ];
-  if (c.yandex_client_id) rows.push(['Yandex Client ID', c.yandex_client_id]);
+  if (c.yandex_client_id) rows.push(['Yandex Client ID', esc(c.yandex_client_id)]);
   document.getElementById('review-table').innerHTML = rows.map(function(r) {
     return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>';
   }).join('');
