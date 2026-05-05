@@ -15,6 +15,9 @@ type Config struct {
 	OIDCIssuer         string
 	OIDCClientID       string
 	OIDCClientSecret   string
+	YandexClientID     string
+	YandexClientSecret string
+	AdminEmail         string
 	SecretKey          []byte
 	RepoCacheDir       string
 	RepoCacheTTL       time.Duration
@@ -34,13 +37,16 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Port:             getEnv("PUBOBS_PORT", "8080"),
-		BaseURL:          getEnv("PUBOBS_BASE_URL", ""),
-		OIDCIssuer:       getEnv("PUBOBS_OIDC_ISSUER", ""),
-		OIDCClientID:     getEnv("PUBOBS_OIDC_CLIENT_ID", ""),
-		OIDCClientSecret: getEnv("PUBOBS_OIDC_CLIENT_SECRET", ""),
-		RepoCacheDir:     getEnv("PUBOBS_REPO_CACHE_DIR", defaultCacheDir),
-		DBPath:           getEnv("PUBOBS_DB_PATH", defaultDBPath),
+		Port:               getEnv("PUBOBS_PORT", "8080"),
+		BaseURL:            getEnv("PUBOBS_BASE_URL", ""),
+		OIDCIssuer:         getEnv("PUBOBS_OIDC_ISSUER", ""),
+		OIDCClientID:       getEnv("PUBOBS_OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:   getEnv("PUBOBS_OIDC_CLIENT_SECRET", ""),
+		YandexClientID:     getEnv("PUBOBS_YANDEX_CLIENT_ID", ""),
+		YandexClientSecret: getEnv("PUBOBS_YANDEX_CLIENT_SECRET", ""),
+		AdminEmail:         getEnv("PUBOBS_ADMIN_EMAIL", ""),
+		RepoCacheDir:       getEnv("PUBOBS_REPO_CACHE_DIR", defaultCacheDir),
+		DBPath:             getEnv("PUBOBS_DB_PATH", defaultDBPath),
 	}
 
 	if raw := os.Getenv("PUBOBS_SECRET_KEY"); raw != "" {
