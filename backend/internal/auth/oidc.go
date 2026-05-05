@@ -54,7 +54,7 @@ func NewOIDCClient(ctx context.Context, issuer, clientID, clientSecret, baseURL 
 
 // AuthCodeURL returns the OIDC authorization URL with the given state.
 func (c *OIDCClient) AuthCodeURL(state string) string {
-	return c.oauth2.AuthCodeURL(state)
+	return c.oauth2.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account"))
 }
 
 // ExchangeCode exchanges an OIDC authorization code for validated user claims.
