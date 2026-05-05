@@ -52,10 +52,15 @@ func runCmd(ch chan string, mu *sync.Mutex, logBuf *strings.Builder, dir string,
 	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
 		return err
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		buf := make([]byte, 512)
 		for {
 			n, err := pr.Read(buf)
@@ -70,6 +75,7 @@ func runCmd(ch chan string, mu *sync.Mutex, logBuf *strings.Builder, dir string,
 
 	err := cmd.Wait()
 	pw.Close()
+	wg.Wait()
 	return err
 }
 
@@ -233,7 +239,11 @@ func retryTLS(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu 
 
 func skipTLS(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu *sync.Mutex) {
 	envPath := repoDir + "/backend/.env"
-	writeEnvFile(envPath, cfg, false)
+	if err := writeEnvFile(envPath, cfg, false); err != nil {
+		sectionError(ch, mu, logBuf, "Skip TLS", fmt.Sprintf("write .env: %v", err))
+		done(ch)
+		return
+	}
 	emit(ch, mu, logBuf, map[string]string{"type": "log", "text": "Updated .env to use http://\n"})
 	exec.Command("docker", "compose", "-f", repoDir+"/backend/docker-compose.yml", "restart").Run()
 	done(ch)
