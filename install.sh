@@ -32,7 +32,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" pull --ff-only
 else
   echo "Cloning PubObs to $INSTALL_DIR..."
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  git clone --branch main "$REPO_URL" "$INSTALL_DIR"
 fi
 
 INSTALLER="$INSTALL_DIR/installer/bin/$BINARY"
