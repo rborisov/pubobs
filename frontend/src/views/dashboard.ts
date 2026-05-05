@@ -78,7 +78,7 @@ function syncSection(repo: Repo): HTMLElement {
 
   const summary = document.createElement('summary');
   summary.style.cssText =
-    'cursor:pointer;font-size:0.875rem;font-weight:500;color:#0f172a;user-select:none;list-style:none';
+    'cursor:pointer;font-size:0.875rem;font-weight:500;color:#5B6B8E;user-select:none;list-style:none';
   summary.innerHTML = `<span style="margin-right:6px">▸</span>Obsidian sync setup`;
   sec.addEventListener('toggle', () => {
     const arrow = summary.querySelector('span')!;
@@ -108,7 +108,7 @@ function syncSection(repo: Repo): HTMLElement {
   const copyBtn = document.createElement('button');
   copyBtn.textContent = 'Copy';
   copyBtn.style.cssText =
-    'padding:4px 10px;background:#0f172a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem;white-space:nowrap';
+    'padding:4px 10px;background:#5B6B8E;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem;white-space:nowrap';
   copyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(backendUrl).then(() => {
       copyBtn.textContent = 'Copied!';
@@ -154,7 +154,7 @@ function mkBtn(text: string, variant: 'primary' | 'ghost'): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = text;
   b.style.cssText = variant === 'primary'
-    ? 'padding:7px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem'
+    ? 'padding:7px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem'
     : 'padding:7px 16px;background:none;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-size:0.875rem';
   return b;
 }

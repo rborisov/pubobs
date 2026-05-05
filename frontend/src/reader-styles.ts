@@ -15,7 +15,7 @@ export function ensureReaderStyles(): void {
       --r-code-bg: #f1f5f9;
       --r-tag-bg: #f1f5f9;
       --r-tag-text: #475569;
-      --r-link: #2563eb;
+      --r-link: #5B6B8E;
       --r-card-bg: #f8fafc;
       --r-error: #cc0000;
     }
@@ -30,7 +30,7 @@ export function ensureReaderStyles(): void {
         --r-code-bg: #1e293b;
         --r-tag-bg: #1e293b;
         --r-tag-text: #94a3b8;
-        --r-link: #60a5fa;
+        --r-link: #8094AF;
         --r-card-bg: #1e293b;
         --r-error: #f87171;
       }
@@ -70,9 +70,10 @@ export function ensureReaderStyles(): void {
       box-sizing: border-box; background: var(--r-bg); color: var(--r-text);
     }
     .r-btn-primary {
-      padding: 8px 16px; background: var(--r-text); color: var(--r-bg);
+      padding: 8px 16px; background: #5B6B8E; color: #fff;
       border: none; border-radius: 6px; cursor: pointer; font-size: 0.875rem;
     }
+    .r-btn-primary:hover { background: #4a5a7a; }
     .r-error { color: var(--r-error); }
     .r-link { color: var(--r-link); }
   `;

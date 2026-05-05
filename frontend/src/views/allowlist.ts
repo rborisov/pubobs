@@ -127,7 +127,7 @@ function buildAddForm(onAdd: (pattern: string) => Promise<void>): HTMLElement {
   const addBtn = document.createElement('button');
   addBtn.textContent = 'Add';
   addBtn.style.cssText =
-    'padding:8px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem;align-self:flex-end;margin-top:4px';
+    'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem;align-self:flex-end;margin-top:4px';
 
   const errSpan = document.createElement('span');
   errSpan.style.cssText = 'color:#c00;font-size:0.8rem;display:none;align-self:center';

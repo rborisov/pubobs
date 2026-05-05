@@ -157,7 +157,7 @@ function grantForm(users: User[], onGrant: (userId: string, role: string) => Pro
           <option>admin</option>
         </select>
       </label>
-      <button class="grant-btn" style="padding:8px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer">Grant</button>
+      <button class="grant-btn" style="padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer">Grant</button>
       <span class="grant-err" style="color:#c00;font-size:0.8rem;display:none"></span>
     </div>
   `;
@@ -193,7 +193,7 @@ function repoEditForm(repo: Repo, onSave: (d: EditData) => Promise<void>, onCanc
       <label>Password / token<br><input name="password" type="password" style="${inp}" placeholder="leave blank to keep existing"></label>
     </div>
     <div style="margin-top:16px;display:flex;gap:8px">
-      <button class="save" style="padding:8px 20px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer">Save</button>
+      <button class="save" style="padding:8px 20px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer">Save</button>
       <button class="cancel" style="padding:8px 20px;background:#e2e8f0;border:none;border-radius:6px;cursor:pointer">Cancel</button>
       <span class="err" style="color:#c00;align-self:center;display:none"></span>
     </div>

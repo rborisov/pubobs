@@ -264,11 +264,11 @@ function mkBtn(text: string, variant: 'primary' | 'ghost' | 'link' | 'link-dange
   b.textContent = text;
   const styles: Record<string, string> = {
     primary:
-      'padding:8px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem',
+      'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem',
     ghost:
       'padding:8px 16px;background:none;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-size:0.875rem',
     link:
-      'background:none;border:none;cursor:pointer;color:#0f172a;text-decoration:underline;font-size:0.8rem;padding:0',
+      'background:none;border:none;cursor:pointer;color:#5B6B8E;text-decoration:underline;font-size:0.8rem;padding:0',
     'link-danger':
       'background:none;border:none;cursor:pointer;color:#dc2626;text-decoration:underline;font-size:0.8rem;padding:0',
   };

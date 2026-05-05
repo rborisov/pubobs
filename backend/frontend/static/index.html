@@ -5,9 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PubObs Admin</title>
   <style>
+    :root {
+      --brand-slate: #5B6B8E;
+      --brand-teal:  #4BB585;
+      --brand-dark:  #2D3F56;
+      --brand-light: #8094AF;
+      --brand-bg:    #f4f6fa;
+    }
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; background: #f8fafc; color: #1a1a1a; }
-    a { color: #0f172a; }
+    body { margin: 0; background: var(--brand-bg); color: #1a1a1a; }
+    a { color: var(--brand-slate); }
     input, select, button { font-family: system-ui, sans-serif; font-size: 0.875rem; }
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
