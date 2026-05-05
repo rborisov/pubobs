@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/pubobs/pubobs.git"
+REPO_URL="https://lab.rclmx.ru/gogs/rborisov/pubobs.git"
 INSTALL_DIR="/opt/pubobs"
 PORT=8000
 
