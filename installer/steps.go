@@ -184,7 +184,7 @@ func installComposePlugin(ch chan string, mu *sync.Mutex, logBuf *strings.Builde
 }
 
 func stepBuildApp(ch chan string, mu *sync.Mutex, logBuf *strings.Builder) error {
-	return runCmd(ch, mu, logBuf, repoDir+"/backend", "docker", "compose", "build", "--no-cache")
+	return runCmd(ch, mu, logBuf, repoDir+"/backend", "docker", "compose", "build")
 }
 
 func stepStartContainers(cfg *installerConfig, ch chan string, mu *sync.Mutex, logBuf *strings.Builder) error {
