@@ -2,11 +2,26 @@ package api
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/pubobs/backend/internal/auth"
 )
+
+func handleListProviders(deps *Deps) http.HandlerFunc {
+	type providerInfo struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		list := make([]providerInfo, len(deps.OIDCProviders))
+		for i, p := range deps.OIDCProviders {
+			list[i] = providerInfo{ID: p.ID, Name: p.Name}
+		}
+		writeJSON(w, http.StatusOK, list)
+	}
+}
 
 func handlePluginAuth(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -14,13 +29,21 @@ func handlePluginAuth(deps *Deps) http.HandlerFunc {
 		redirectURI := q.Get("redirect_uri")
 		codeChallenge := q.Get("code_challenge")
 		pluginState := q.Get("state")
+		providerID := q.Get("provider")
 		if redirectURI == "" || codeChallenge == "" {
 			writeError(w, http.StatusBadRequest, "redirect_uri and code_challenge are required")
 			return
 		}
-		sessionID := deps.Auth.StoreSession(codeChallenge, redirectURI, pluginState)
-		authURL := deps.OIDC.AuthCodeURL(sessionID)
-		http.Redirect(w, r, authURL, http.StatusFound)
+		if providerID == "" {
+			providerID = deps.OIDCProviders[0].ID
+		}
+		p := deps.oidcProvider(providerID)
+		if p == nil {
+			writeError(w, http.StatusBadRequest, "unknown provider")
+			return
+		}
+		sessionID := deps.Auth.StoreSession(codeChallenge, redirectURI, pluginState, providerID)
+		http.Redirect(w, r, p.Client.AuthCodeURL(sessionID), http.StatusFound)
 	}
 }
 
@@ -34,9 +57,15 @@ func handleAuthCallback(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid or expired session")
 			return
 		}
-		claims, err := deps.OIDC.ExchangeCode(r.Context(), code)
+		p := deps.oidcProvider(sess.ProviderID)
+		if p == nil {
+			serveAuthError(w, "Unknown auth provider.")
+			return
+		}
+		claims, err := p.Client.ExchangeCode(r.Context(), code)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "OIDC exchange failed")
+			log.Printf("auth exchange error (provider=%s): %v", sess.ProviderID, err)
+			serveAuthError(w, "Sign-in failed. Please try again.")
 			return
 		}
 
@@ -58,6 +87,15 @@ func handleAuthCallback(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "upsert user failed")
 			return
 		}
+
+		if deps.Config.AdminEmail != "" && user.Email == deps.Config.AdminEmail && !user.IsInstanceAdmin {
+			admins, err := deps.Store.ListInstanceAdmins(r.Context())
+			if err == nil && len(admins) == 0 {
+				deps.Store.SetInstanceAdmin(r.Context(), user.ID, true)
+				user.IsInstanceAdmin = true
+			}
+		}
+
 		authCode := deps.Auth.StoreAuthCode(user.ID, sess.CodeChallenge)
 		redirectURL := fmt.Sprintf("%s?code=%s&state=%s", sess.RedirectURI, authCode, sess.PluginState)
 		serveAuthSuccess(w, redirectURL)
@@ -123,11 +161,21 @@ func serveAuthError(w http.ResponseWriter, msg string) {
 <head>
   <meta charset="UTF-8">
   <title>PubObs — Access denied</title>
-  <style>body{font-family:system-ui,sans-serif;max-width:480px;margin:120px auto;padding:0 24px;color:#1a1a1a}p{color:#555}</style>
+  <style>
+    body{margin:0;background:#f4f6fa;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(45,63,86,.10);padding:40px 32px;max-width:360px;width:100%%;text-align:center}
+    h2{margin:0 0 12px;color:#2D3F56;font-size:1.25rem}
+    p{margin:0 0 24px;color:#64748b;font-size:0.9rem;line-height:1.5}
+    a{display:inline-block;padding:10px 24px;background:#5B6B8E;color:#fff;border-radius:8px;text-decoration:none;font-size:0.9rem}
+    a:hover{background:#4a5a7a}
+  </style>
 </head>
 <body>
-  <h2>Access denied</h2>
-  <p>%s</p>
+  <div class="card">
+    <h2>Access denied</h2>
+    <p>%s</p>
+    <a href="/">Back to sign in</a>
+  </div>
 </body>
 </html>`, msg)
 }

@@ -79,3 +79,45 @@ func TestHandleRefresh(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 }
+
+func TestAutoPromoteAdmin_firstLogin(t *testing.T) {
+	deps := newTestDeps(t)
+	deps.Config.AdminEmail = "boss@x.com"
+
+	ctx := t.Context()
+	user, err := deps.Store.UpsertUser(ctx, "u1", "boss@x.com", "Boss")
+	require.NoError(t, err)
+	require.False(t, user.IsInstanceAdmin)
+
+	if deps.Config.AdminEmail != "" && user.Email == deps.Config.AdminEmail && !user.IsInstanceAdmin {
+		admins, err := deps.Store.ListInstanceAdmins(ctx)
+		require.NoError(t, err)
+		if len(admins) == 0 {
+			require.NoError(t, deps.Store.SetInstanceAdmin(ctx, user.ID, true))
+		}
+	}
+
+	promoted, err := deps.Store.GetUserByID(ctx, "u1")
+	require.NoError(t, err)
+	require.True(t, promoted.IsInstanceAdmin)
+}
+
+func TestAutoPromoteAdmin_notFirstAdmin(t *testing.T) {
+	deps := newTestDeps(t)
+	deps.Config.AdminEmail = "second@x.com"
+	ctx := t.Context()
+
+	deps.Store.UpsertUser(ctx, "existing", "existing@x.com", "Existing")
+	deps.Store.SetInstanceAdmin(ctx, "existing", true)
+
+	user, _ := deps.Store.UpsertUser(ctx, "u2", "second@x.com", "Second")
+	if deps.Config.AdminEmail != "" && user.Email == deps.Config.AdminEmail && !user.IsInstanceAdmin {
+		admins, _ := deps.Store.ListInstanceAdmins(ctx)
+		if len(admins) == 0 {
+			deps.Store.SetInstanceAdmin(ctx, user.ID, true)
+		}
+	}
+
+	notPromoted, _ := deps.Store.GetUserByID(ctx, "u2")
+	require.False(t, notPromoted.IsInstanceAdmin)
+}
