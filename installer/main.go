@@ -96,9 +96,7 @@ func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg.SecretKey == "" {
-		key := make([]byte, 32)
-		rand.Read(key)
-		cfg.SecretKey = hex.EncodeToString(key)
+		cfg.SecretKey = generateSecretKey()
 	}
 	s.state.mu.Lock()
 	s.state.cfg = &cfg
@@ -113,14 +111,15 @@ func (s *server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"already running"}`, http.StatusConflict)
 		return
 	}
-	s.state.status = "running"
 	cfg := s.state.cfg
-	s.state.mu.Unlock()
-
 	if cfg == nil {
+		s.state.mu.Unlock()
 		http.Error(w, `{"error":"config not set"}`, http.StatusBadRequest)
 		return
 	}
+	s.state.status = "running"
+	s.state.mu.Unlock()
+
 	go runInstall(cfg, s.eventCh, s.logBuf, &s.mu)
 	writeJSON(w, map[string]bool{"ok": true})
 }
@@ -169,7 +168,7 @@ func (s *server) handleSkipTLS(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil {
 		go skipTLS(cfg, s.eventCh, s.logBuf, &s.mu)
 	} else {
-		s.eventCh <- `{"type":"done"}`
+		go func() { s.eventCh <- `{"type":"done"}` }()
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
@@ -198,9 +197,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func generateSecretKey() string {
 	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		log.Fatalf("generate key: %v", err)
-	}
+	rand.Read(key)
 	return hex.EncodeToString(key)
 }
 
