@@ -202,7 +202,7 @@ func stepStartContainers(cfg *installerConfig, ch chan string, mu *sync.Mutex, l
 	if err := runCmd(ch, mu, logBuf, repoDir+"/backend", "docker", "compose", "up", "-d"); err != nil {
 		return err
 	}
-	return waitForHealthz(ch, mu, logBuf, "http://localhost:8080/healthz", 30*time.Second)
+	return waitForHealthz(ch, mu, logBuf, "http://localhost:8181/healthz", 30*time.Second)
 }
 
 func waitForHealthz(ch chan string, mu *sync.Mutex, logBuf *strings.Builder, url string, timeout time.Duration) error {
@@ -231,7 +231,7 @@ func stepConfigureNginx(cfg *installerConfig, ch chan string, mu *sync.Mutex, lo
     listen 80;
     server_name %s;
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8181;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
