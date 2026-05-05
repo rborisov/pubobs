@@ -121,3 +121,12 @@ func TestAutoPromoteAdmin_notFirstAdmin(t *testing.T) {
 	notPromoted, _ := deps.Store.GetUserByID(ctx, "u2")
 	require.False(t, notPromoted.IsInstanceAdmin)
 }
+
+func TestHealthz(t *testing.T) {
+	deps := newTestDeps(t)
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"ok"`)
+}

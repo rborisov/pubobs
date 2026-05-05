@@ -22,10 +22,15 @@ func BuildRouter(deps *Deps) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	// Auth (unauthenticated)
+	r.Get("/auth/providers", handleListProviders(deps))
 	r.Get("/auth/plugin", handlePluginAuth(deps))
 	r.Get("/auth/callback", handleAuthCallback(deps))
 	r.Post("/auth/token", handleToken(deps))
 	r.Post("/auth/refresh", handleRefresh(deps))
+
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
