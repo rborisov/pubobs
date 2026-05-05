@@ -236,9 +236,3 @@ func writeEnvFile(path string, cfg *installerConfig, useTLS bool) error {
 	return os.WriteFile(path, []byte(content), 0600)
 }
 
-// stubs replaced by steps.go in Task 8
-func runInstall(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu *sync.Mutex) {}
-func retryTLS(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu *sync.Mutex)  {}
-func skipTLS(cfg *installerConfig, ch chan string, logBuf *strings.Builder, mu *sync.Mutex) {
-	ch <- `{"type":"done"}`
-}
