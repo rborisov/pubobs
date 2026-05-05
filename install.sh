@@ -11,14 +11,15 @@ echo ""
 # Detect architecture
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64)  BINARY="installer-linux-amd64" ;;
-  aarch64) BINARY="installer-linux-arm64" ;;
-  arm64)   BINARY="installer-linux-arm64" ;;
+  x86_64)  ARCH_NAME="amd64" ;;
+  aarch64) ARCH_NAME="arm64" ;;
+  arm64)   ARCH_NAME="arm64" ;;
   *)
     echo "Unsupported architecture: $ARCH"
     exit 1
     ;;
 esac
+BINARY="installer-linux-${ARCH_NAME}"
 
 # Install git if missing
 if ! command -v git &>/dev/null; then
@@ -26,13 +27,20 @@ if ! command -v git &>/dev/null; then
   apt-get update -qq && apt-get install -y -qq git
 fi
 
-# Clone or update repo
+# Clone or update repo (sparse: skip binaries for other architectures)
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "Repo already exists at $INSTALL_DIR, updating..."
   git -C "$INSTALL_DIR" pull --ff-only
 else
   echo "Cloning PubObs to $INSTALL_DIR..."
-  git clone --branch main "$REPO_URL" "$INSTALL_DIR"
+  git clone --branch main --filter=blob:none --sparse "$REPO_URL" "$INSTALL_DIR"
+  git -C "$INSTALL_DIR" sparse-checkout set \
+    --no-cone \
+    '/*' \
+    '!/backend/bin/' \
+    '!/installer/bin/' \
+    "backend/bin/pubobs-linux-${ARCH_NAME}" \
+    "installer/bin/installer-linux-${ARCH_NAME}"
 fi
 
 INSTALLER="$INSTALL_DIR/installer/bin/$BINARY"
