@@ -250,14 +250,23 @@ export interface PubNoteDetail {
   backlinks: Array<{ path: string; title: string }>;
 }
 
+// pubFetch attaches a Bearer token when the user is logged in so private repos
+// are accessible to authenticated readers, while still working for guests on
+// repos with allow_guest enabled.
+async function pubFetch(input: string): Promise<Response> {
+  const t = tokenStore.get();
+  if (t && !tokenStore.isExpired()) {
+    return fetch(input, { headers: { Authorization: `Bearer ${t.accessToken}` } });
+  }
+  return fetch(input);
+}
+
 export async function pubListNotes(repoId: string): Promise<{ repo: PubRepo; notes: PubNote[] }> {
-  const resp = await fetch(`/pub/${repoId}`);
-  return json(resp);
+  return json(await pubFetch(`/pub/${repoId}`));
 }
 
 export async function pubGetNote(repoId: string, notePath: string): Promise<PubNoteDetail> {
-  const resp = await fetch(`/pub/${repoId}/notes/${notePath}`);
-  return json(resp);
+  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}`));
 }
 
 export interface PubComment {
@@ -268,8 +277,7 @@ export interface PubComment {
 }
 
 export async function pubListComments(repoId: string, notePath: string): Promise<PubComment[]> {
-  const resp = await fetch(`/pub/${repoId}/notes/${notePath}/comments`);
-  return json(resp);
+  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}/comments`));
 }
 
 export async function addComment(repoId: string, notePath: string, body: string): Promise<void> {

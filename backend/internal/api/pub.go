@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/pubobs/backend/internal/auth"
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
@@ -19,11 +20,37 @@ func rewriteRepoID(html, repoID string) string {
 	return repoIDInHTML.ReplaceAllString(html, "${1}"+repoID+"/")
 }
 
+// pubRepoAccess returns the repo if the request is allowed to access it.
+// Access is granted when allow_guest is true, or when the request carries a
+// valid auth token with at least the reader role for this repo.
+func pubRepoAccess(r *http.Request, deps *Deps, repoID string) *model.Repo {
+	repo, err := deps.Store.GetRepo(r.Context(), repoID)
+	if err != nil || repo == nil {
+		return nil
+	}
+	if repo.AllowGuest {
+		return repo
+	}
+	// Try bearer token for authenticated readers of private repos.
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenStr == "" {
+		return nil
+	}
+	claims, err := auth.VerifyAccessToken(deps.Config.SecretKey, tokenStr)
+	if err != nil {
+		return nil
+	}
+	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
+		return nil
+	}
+	return repo
+}
+
 func handlePubListNotes(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
-		repo, err := deps.Store.GetRepo(r.Context(), repoID)
-		if err != nil || repo == nil || !repo.AllowGuest {
+		repo := pubRepoAccess(r, deps, repoID)
+		if repo == nil {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
@@ -80,8 +107,7 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		repoID := chi.URLParam(r, "repoId")
 		notePath := chi.URLParam(r, "*")
 
-		repo, err := deps.Store.GetRepo(r.Context(), repoID)
-		if err != nil || repo == nil || !repo.AllowGuest {
+		if pubRepoAccess(r, deps, repoID) == nil {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
@@ -171,8 +197,7 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 		repoID := chi.URLParam(r, "repoId")
 		assetPath := chi.URLParam(r, "*")
 
-		repo, err := deps.Store.GetRepo(r.Context(), repoID)
-		if err != nil || repo == nil || !repo.AllowGuest {
+		if pubRepoAccess(r, deps, repoID) == nil {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
