@@ -23,7 +23,7 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
 		repo, err := deps.Store.GetRepo(r.Context(), repoID)
-		if err != nil || repo == nil {
+		if err != nil || repo == nil || !repo.AllowGuest {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
@@ -79,6 +79,12 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
 		notePath := chi.URLParam(r, "*")
+
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil || !repo.AllowGuest {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
 
 		if strings.HasSuffix(notePath, "/comments") {
 			notePath = strings.TrimSuffix(notePath, "/comments")
@@ -164,6 +170,12 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
 		assetPath := chi.URLParam(r, "*")
+
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil || !repo.AllowGuest {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
 
 		data, err := deps.Cache.ReadAsset(repoID, assetPath)
 		if err != nil {

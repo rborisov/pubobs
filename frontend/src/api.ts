@@ -5,6 +5,7 @@ export interface Repo {
   default_branch: string;
   is_cloned: boolean;
   role: string; // "admin" | "editor" | "commentator" | "reader"
+  allow_guest: boolean;
 }
 
 export interface RepoAccess {
@@ -151,6 +152,15 @@ export async function updateRepo(id: string, body: {
 
 export async function deleteRepo(id: string): Promise<void> {
   const resp = await authedFetch(`/api/admin/repos/${id}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setRepoGuestAccess(id: string, allowGuest: boolean): Promise<void> {
+  const resp = await authedFetch(`/api/admin/repos/${id}/guest-access`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ allow_guest: allowGuest }),
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 

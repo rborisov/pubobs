@@ -33,6 +33,7 @@ type Repo struct {
 	ClonedAt       *time.Time
 	LastUsedAt     *time.Time
 	CreatedAt      time.Time
+	AllowGuest     bool
 }
 
 type RepoAccess struct {

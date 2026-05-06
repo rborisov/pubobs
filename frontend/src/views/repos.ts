@@ -1,4 +1,4 @@
-import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, type Repo } from '../api';
+import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo } from '../api';
 
 export async function reposView(): Promise<HTMLElement> {
   const wrap = document.createElement('div');
@@ -63,7 +63,7 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
 
   const table = document.createElement('table');
   table.innerHTML = `<thead><tr>
-    <th>Name</th><th>Remote</th><th>Branch</th><th>Status</th><th></th>
+    <th>Name</th><th>Remote</th><th>Branch</th><th>Status</th><th>Guest</th><th></th>
   </tr></thead>`;
 
   const tbody = document.createElement('tbody');
@@ -91,6 +91,10 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
     statusCell.textContent = repo.is_cloned ? '● cloned' : '○ pending';
     statusCell.style.color = repo.is_cloned ? '#16a34a' : '#94a3b8';
 
+    const guestCell = document.createElement('td');
+    const guestBtn = mkBtn(repo.allow_guest ? 'On' : 'Off', repo.allow_guest ? 'toggle-on' : 'toggle-off');
+    guestCell.appendChild(guestBtn);
+
     const actionsCell = document.createElement('td');
     actionsCell.style.whiteSpace = 'nowrap';
 
@@ -107,6 +111,7 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
     row.appendChild(remoteCell);
     row.appendChild(branchCell);
     row.appendChild(statusCell);
+    row.appendChild(guestCell);
     row.appendChild(actionsCell);
     tbody.appendChild(row);
 
@@ -120,7 +125,7 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
       const formRow = document.createElement('tr');
       formRow.className = 'inline-form';
       const formCell = document.createElement('td');
-      formCell.colSpan = 5;
+      formCell.colSpan = 6;
       formCell.style.padding = '0';
 
       formCell.appendChild(
@@ -133,6 +138,22 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
 
       formRow.appendChild(formCell);
       row.after(formRow);
+    });
+
+    // Toggle guest access
+    guestBtn.addEventListener('click', async () => {
+      const next = !repo.allow_guest;
+      guestBtn.disabled = true;
+      try {
+        await setRepoGuestAccess(repo.id, next);
+        repo.allow_guest = next;
+        guestBtn.textContent = next ? 'On' : 'Off';
+        applyToggleStyle(guestBtn, next);
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        guestBtn.disabled = false;
+      }
     });
 
     // Import from git
@@ -259,9 +280,19 @@ function repoForm(
   return wrap;
 }
 
-function mkBtn(text: string, variant: 'primary' | 'ghost' | 'link' | 'link-danger'): HTMLButtonElement {
+function applyToggleStyle(b: HTMLButtonElement, on: boolean): void {
+  b.style.cssText = on
+    ? 'padding:2px 8px;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:4px;cursor:pointer;font-size:0.75rem'
+    : 'padding:2px 8px;background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;font-size:0.75rem';
+}
+
+function mkBtn(text: string, variant: 'primary' | 'ghost' | 'link' | 'link-danger' | 'toggle-on' | 'toggle-off'): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = text;
+  if (variant === 'toggle-on' || variant === 'toggle-off') {
+    applyToggleStyle(b, variant === 'toggle-on');
+    return b;
+  }
   const styles: Record<string, string> = {
     primary:
       'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem',

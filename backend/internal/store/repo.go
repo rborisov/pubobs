@@ -25,7 +25,7 @@ func (s *Store) CreateRepo(ctx context.Context, id, name, remoteURL, encCreds, b
 func (s *Store) GetRepo(ctx context.Context, id string) (*model.Repo, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at
+		       local_path, cloned_at, last_used_at, created_at, allow_guest
 		FROM repos WHERE id=?`, id)
 	return scanRepo(row)
 }
@@ -33,7 +33,7 @@ func (s *Store) GetRepo(ctx context.Context, id string) (*model.Repo, error) {
 func (s *Store) ListRepos(ctx context.Context) ([]*model.Repo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at
+		       local_path, cloned_at, last_used_at, created_at, allow_guest
 		FROM repos ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -48,6 +48,15 @@ func (s *Store) ListRepos(ctx context.Context) ([]*model.Repo, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) SetRepoAllowGuest(ctx context.Context, id string, allow bool) error {
+	v := 0
+	if allow {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE repos SET allow_guest=? WHERE id=?`, v, id)
+	return err
 }
 
 func (s *Store) UpdateRepo(ctx context.Context, id, name, remoteURL, encCreds, branch string) error {
@@ -84,7 +93,7 @@ func (s *Store) TouchLastUsedAt(ctx context.Context, id string) error {
 func (s *Store) ListStaleRepos(ctx context.Context, cutoff time.Time) ([]*model.Repo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at
+		       local_path, cloned_at, last_used_at, created_at, allow_guest
 		FROM repos WHERE local_path IS NOT NULL AND last_used_at < ?`, cutoff)
 	if err != nil {
 		return nil, err
@@ -105,9 +114,10 @@ func scanRepo(row scanner) (*model.Repo, error) {
 	var r model.Repo
 	var localPath sql.NullString
 	var clonedAt, lastUsedAt sql.NullTime
+	var allowGuest int
 	err := row.Scan(
 		&r.ID, &r.Name, &r.RemoteURL, &r.EncryptedCreds, &r.DefaultBranch,
-		&localPath, &clonedAt, &lastUsedAt, &r.CreatedAt,
+		&localPath, &clonedAt, &lastUsedAt, &r.CreatedAt, &allowGuest,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -124,5 +134,6 @@ func scanRepo(row scanner) (*model.Repo, error) {
 	if lastUsedAt.Valid {
 		r.LastUsedAt = &lastUsedAt.Time
 	}
+	r.AllowGuest = allowGuest != 0
 	return &r, nil
 }

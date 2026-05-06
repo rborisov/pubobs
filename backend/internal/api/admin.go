@@ -162,6 +162,28 @@ func handleAdminUpdateRepo(deps *Deps) http.HandlerFunc {
 	}
 }
 
+func handleAdminSetRepoGuestAccess(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+		id := chi.URLParam(r, "id")
+		var body struct {
+			AllowGuest bool `json:"allow_guest"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := deps.Store.SetRepoAllowGuest(r.Context(), id, body.AllowGuest); err != nil {
+			writeError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func handleAdminDeleteRepo(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())

@@ -33,5 +33,11 @@ func Open(dsn string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migrate users.is_banned: %w", err)
 		}
 	}
+	if _, err := db.Exec(`ALTER TABLE repos ADD COLUMN allow_guest INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate repos.allow_guest: %w", err)
+		}
+	}
 	return db, nil
 }
