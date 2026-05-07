@@ -9,20 +9,22 @@ import { allowlistView } from './views/allowlist';
 import { dashboardView } from './views/dashboard';
 import { readerListView } from './views/reader-list';
 import { readerNoteView } from './views/reader-note';
+import { groupsView } from './views/groups';
 
 let currentUser: Me | null = null;
 
 register('/login', () => loginView());
-register('/repos', () => reposView());
+register('/repos', () => reposView(currentUser!));
 register('/repos/:id', ({ id }) => repoDetailView(id));
 register('/users', () => usersView());
 register('/allowlist', () => allowlistView());
 register('/dashboard', () => dashboardView(currentUser!));
+register('/groups', () => groupsView(currentUser!));
 register('/read/:repoId', ({ repoId }) => readerListView(repoId));
 register('/read/:repoId/*', params => readerNoteView(params['repoId'], params['*'] ?? ''));
 register('/', () => {
   navigate(isAuthenticated()
-    ? (currentUser?.is_instance_admin ? '/repos' : '/dashboard')
+    ? (currentUser?.is_instance_admin || currentUser?.is_admin ? '/repos' : '/dashboard')
     : '/login');
   return document.createElement('div');
 });
@@ -64,7 +66,7 @@ async function boot(): Promise<void> {
     renderNav(app, currentUser);
 
     if (!location.hash || location.hash === '#' || location.hash === '#/') {
-      navigate(currentUser.is_instance_admin ? '/repos' : '/dashboard');
+      navigate(currentUser.is_instance_admin || currentUser.is_admin ? '/repos' : '/dashboard');
     }
   }
 
@@ -117,6 +119,21 @@ function renderNav(app: HTMLElement, me: Me): void {
       <button id="signout-btn"
         style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;
                border-radius:4px;transition:background 0.1s">
+        Sign out
+      </button>
+    `;
+  } else if (me.is_admin) {
+    nav.innerHTML = `
+      ${logoHtml}
+      <div style="width:1px;height:20px;background:#3d5470;margin:0 4px"></div>
+      <a href="#/repos" style="${linkStyle}">Repos</a>
+      <a href="#/groups" style="${linkStyle}">Groups</a>
+      <a href="#/users" style="${linkStyle}">Users</a>
+      <span style="flex:1"></span>
+      <span style="color:#8094AF;font-size:0.8rem">${esc(me.email)}</span>
+      <button id="signout-btn"
+        style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;
+               border-radius:4px">
         Sign out
       </button>
     `;

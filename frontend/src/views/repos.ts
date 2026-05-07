@@ -1,6 +1,6 @@
 import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo } from '../api';
 
-export async function reposView(): Promise<HTMLElement> {
+export async function reposView(_me?: import('../api').Me): Promise<HTMLElement> {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:900px;margin:0 auto;padding:32px 24px;font-family:system-ui,sans-serif';
 
