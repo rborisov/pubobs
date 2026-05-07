@@ -161,7 +161,7 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
       btn.disabled = true;
       err.textContent = '';
       try {
-        await addComment(repoId, notePath, body);
+        await addComment(repoId, notePath, body, note.git_commit_sha ?? '');
         ta.value = '';
         await loadComments(repoId, notePath, list);
       } catch (e: unknown) {
@@ -206,12 +206,14 @@ async function loadComments(repoId: string, notePath: string, list: HTMLElement)
   for (const c of comments) {
     const card = document.createElement('div');
     card.className = 'r-comment-card';
+    if (c.is_outdated) card.style.opacity = '0.6';
 
     const meta = document.createElement('div');
-    meta.style.cssText = 'display:flex;gap:8px;align-items:baseline;margin-bottom:6px';
+    meta.style.cssText = 'display:flex;gap:8px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap';
     meta.innerHTML = `
       <span class="r-comment-author">${esc(c.author_name || c.author_email)}</span>
       <span class="r-comment-date">${new Date(c.created_at).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' })}</span>
+      ${c.is_outdated ? '<span style="font-size:0.75rem;color:var(--r-faint,#999);font-style:italic">added before last edit</span>' : ''}
     `;
 
     const body = document.createElement('div');

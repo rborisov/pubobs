@@ -274,17 +274,18 @@ export interface PubComment {
   created_at: string;
   author_email: string;
   author_name: string;
+  is_outdated: boolean;
 }
 
 export async function pubListComments(repoId: string, notePath: string): Promise<PubComment[]> {
   return json(await pubFetch(`/pub/${repoId}/notes/${notePath}/comments`));
 }
 
-export async function addComment(repoId: string, notePath: string, body: string): Promise<void> {
+export async function addComment(repoId: string, notePath: string, body: string, noteCommitSha: string): Promise<void> {
   const resp = await authedFetch(`/api/repos/${repoId}/notes/${notePath}/comments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ body, note_commit_sha: noteCommitSha }),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
