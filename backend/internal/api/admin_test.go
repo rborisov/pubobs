@@ -167,3 +167,120 @@ func TestAdminSetUserAdmin(t *testing.T) {
 	u, _ := deps.Store.GetUserByID(ctx, "target")
 	require.True(t, u.IsAdmin)
 }
+
+func TestAdminCreateGroup_userAdmin_autoGrantsAdminRole(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+
+	body := `{"name":"My Group"}`
+	req := httptest.NewRequest("POST", "/api/admin/groups", strings.NewReader(body))
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	groupID := resp["id"]
+	require.NotEmpty(t, groupID)
+
+	ok, _ := deps.Store.IsGroupAdmin(ctx, groupID, "ua1")
+	require.True(t, ok)
+}
+
+func TestAdminListGroups_userAdmin(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	g, _ := deps.Store.CreateGroup(ctx, "g1", "Team")
+	deps.Store.AddGroupMember(ctx, g.ID, "ua1", "admin")
+	deps.Store.CreateGroup(ctx, "g2", "Other") // not admin here
+
+	req := httptest.NewRequest("GET", "/api/admin/groups", nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var groups []map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&groups))
+	require.Len(t, groups, 1)
+	require.Equal(t, "g1", groups[0]["id"])
+}
+
+func TestAdminListGroupMembers(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "U2")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	deps.Store.CreateGroup(ctx, "g1", "Team")
+	deps.Store.AddGroupMember(ctx, "g1", "ua1", "admin")
+	deps.Store.AddGroupMember(ctx, "g1", "u2", "member")
+
+	req := httptest.NewRequest("GET", "/api/admin/groups/g1/members", nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var members []map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&members))
+	require.Len(t, members, 2)
+}
+
+func TestAdminRemoveGroupMember(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "U2")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	deps.Store.CreateGroup(ctx, "g1", "Team")
+	deps.Store.AddGroupMember(ctx, "g1", "ua1", "admin")
+	deps.Store.AddGroupMember(ctx, "g1", "u2", "member")
+
+	req := httptest.NewRequest("DELETE", "/api/admin/groups/g1/members/u2", nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+}
+
+func TestAdminSetGroupMemberRole(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "U2")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	deps.Store.CreateGroup(ctx, "g1", "Team")
+	deps.Store.AddGroupMember(ctx, "g1", "ua1", "admin")
+	deps.Store.AddGroupMember(ctx, "g1", "u2", "member")
+
+	req := httptest.NewRequest("PUT", "/api/admin/groups/g1/members/u2/role",
+		strings.NewReader(`{"role":"admin"}`))
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	ok, _ := deps.Store.IsGroupAdmin(ctx, "g1", "u2")
+	require.True(t, ok)
+}
+
+func TestAdminDeleteGroup(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	deps.Store.CreateGroup(ctx, "g1", "Team")
+	deps.Store.AddGroupMember(ctx, "g1", "ua1", "admin")
+
+	req := httptest.NewRequest("DELETE", "/api/admin/groups/g1", nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+}

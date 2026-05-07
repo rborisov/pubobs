@@ -65,7 +65,12 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Post("/api/admin/allowlist", handleAdminAddAllowlistEntry(deps))
 		r.Delete("/api/admin/allowlist/{id}", handleAdminRemoveAllowlistEntry(deps))
 		r.Post("/api/admin/groups", handleAdminCreateGroup(deps))
+		r.Get("/api/admin/groups", handleAdminListGroups(deps))
+		r.Delete("/api/admin/groups/{id}", handleAdminDeleteGroup(deps))
 		r.Post("/api/admin/groups/{id}/members", handleAdminAddGroupMember(deps))
+		r.Get("/api/admin/groups/{id}/members", handleAdminListGroupMembers(deps))
+		r.Delete("/api/admin/groups/{id}/members/{userID}", handleAdminRemoveGroupMember(deps))
+		r.Put("/api/admin/groups/{id}/members/{userID}/role", handleAdminSetGroupMemberRole(deps))
 	})
 
 	// Public reader (no auth)

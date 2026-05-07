@@ -394,7 +394,7 @@ func handleAdminRemoveAllowlistEntry(deps *Deps) http.HandlerFunc {
 func handleAdminCreateGroup(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		if !requireAnyAdmin(claims, w) {
 			return
 		}
 		var body struct {
@@ -409,7 +409,12 @@ func handleAdminCreateGroup(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "create group failed")
 			return
 		}
-		writeJSON(w, http.StatusCreated, g)
+		if !claims.IsAdmin {
+			if err := deps.Store.AddGroupMember(r.Context(), g.ID, claims.UserID, "admin"); err != nil {
+				log.Printf("[pubobs] auto-grant group admin on %s for user %s failed: %v", g.ID, claims.UserID, err)
+			}
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": g.ID, "name": g.Name})
 	}
 }
 
@@ -438,10 +443,10 @@ func handleAdminSetUserAdmin(deps *Deps) http.HandlerFunc {
 func handleAdminAddGroupMember(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		groupID := chi.URLParam(r, "id")
+		if !requireGroupAdmin(r.Context(), deps, claims, groupID, w) {
 			return
 		}
-		groupID := chi.URLParam(r, "id")
 		var body struct {
 			UserID string `json:"user_id"`
 		}
@@ -451,6 +456,103 @@ func handleAdminAddGroupMember(deps *Deps) http.HandlerFunc {
 		}
 		if err := deps.Store.AddGroupMember(r.Context(), groupID, body.UserID, "member"); err != nil {
 			writeError(w, http.StatusInternalServerError, "add member failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAdminListGroups(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAnyAdmin(claims, w) {
+			return
+		}
+		var groups []*model.Group
+		var err error
+		if claims.IsAdmin {
+			groups, err = deps.Store.ListGroups(r.Context())
+		} else {
+			groups, err = deps.Store.ListAdminGroups(r.Context(), claims.UserID)
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list groups failed")
+			return
+		}
+		if groups == nil {
+			groups = []*model.Group{}
+		}
+		writeJSON(w, http.StatusOK, groups)
+	}
+}
+
+func handleAdminDeleteGroup(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		id := chi.URLParam(r, "id")
+		if !requireGroupAdmin(r.Context(), deps, claims, id, w) {
+			return
+		}
+		if err := deps.Store.DeleteGroup(r.Context(), id); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete group failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAdminListGroupMembers(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		id := chi.URLParam(r, "id")
+		if !requireGroupAdmin(r.Context(), deps, claims, id, w) {
+			return
+		}
+		members, err := deps.Store.ListGroupMembers(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list members failed")
+			return
+		}
+		if members == nil {
+			members = []*model.GroupMember{}
+		}
+		writeJSON(w, http.StatusOK, members)
+	}
+}
+
+func handleAdminRemoveGroupMember(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		groupID := chi.URLParam(r, "id")
+		if !requireGroupAdmin(r.Context(), deps, claims, groupID, w) {
+			return
+		}
+		userID := chi.URLParam(r, "userID")
+		if err := deps.Store.RemoveGroupMember(r.Context(), groupID, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "remove member failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAdminSetGroupMemberRole(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		groupID := chi.URLParam(r, "id")
+		if !requireGroupAdmin(r.Context(), deps, claims, groupID, w) {
+			return
+		}
+		userID := chi.URLParam(r, "userID")
+		var body struct {
+			Role string `json:"role"`
+		}
+		if err := readJSON(r, &body); err != nil || (body.Role != "member" && body.Role != "admin") {
+			writeError(w, http.StatusBadRequest, "role must be 'member' or 'admin'")
+			return
+		}
+		if err := deps.Store.SetGroupMemberRole(r.Context(), groupID, userID, body.Role); err != nil {
+			writeError(w, http.StatusInternalServerError, "set role failed")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

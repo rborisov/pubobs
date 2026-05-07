@@ -19,9 +19,9 @@ type AllowlistEntry struct {
 }
 
 type Group struct {
-	ID        string
-	Name      string
-	CreatedAt time.Time
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type GroupMember struct {
