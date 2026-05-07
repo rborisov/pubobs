@@ -60,6 +60,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Get("/api/admin/users", handleAdminListUsers(deps))
 		r.Post("/api/admin/users/{id}/admin", handleAdminSetAdmin(deps))
 		r.Post("/api/admin/users/{id}/ban", handleAdminSetBan(deps))
+		r.Post("/api/admin/users/{id}/user-admin", handleAdminSetUserAdmin(deps))
 		r.Get("/api/admin/allowlist", handleAdminListAllowlist(deps))
 		r.Post("/api/admin/allowlist", handleAdminAddAllowlistEntry(deps))
 		r.Delete("/api/admin/allowlist/{id}", handleAdminRemoveAllowlistEntry(deps))

@@ -40,7 +40,7 @@ func handleAdminHealth(deps *Deps) http.HandlerFunc {
 func handleAdminCreateRepo(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		if !requireAnyAdmin(claims, w) {
 			return
 		}
 		var body struct {
@@ -67,6 +67,11 @@ func handleAdminCreateRepo(deps *Deps) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "create repo failed")
 			return
+		}
+		if !claims.IsAdmin {
+			if err := deps.Store.GrantAccess(r.Context(), uuid.NewString(), repo.ID, "user", claims.UserID, "admin"); err != nil {
+				log.Printf("[pubobs] auto-grant admin on repo %s for user %s failed: %v", repo.ID, claims.UserID, err)
+			}
 		}
 		userID := claims.UserID
 		go func() {
@@ -404,6 +409,28 @@ func handleAdminCreateGroup(deps *Deps) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, g)
+	}
+}
+
+func handleAdminSetUserAdmin(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAnyAdmin(claims, w) {
+			return
+		}
+		id := chi.URLParam(r, "id")
+		var body struct {
+			Admin bool `json:"admin"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := deps.Store.SetUserAdmin(r.Context(), id, body.Admin); err != nil {
+			writeError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

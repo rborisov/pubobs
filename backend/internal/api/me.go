@@ -21,6 +21,7 @@ func handleMe(deps *Deps) http.HandlerFunc {
 			"email":             user.Email,
 			"name":              user.Name,
 			"is_instance_admin": user.IsInstanceAdmin,
+			"is_admin":          user.IsAdmin,
 		})
 	}
 }
