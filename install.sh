@@ -234,6 +234,8 @@ start_containers() {
 
 restart_containers() {
   info "Restarting containers..."
+  mkdir -p "$BACKEND_DIR/data/db" "$BACKEND_DIR/data/repos"
+  chown -R 1000:1000 "$BACKEND_DIR/data"
   docker compose -f "$BACKEND_DIR/docker-compose.yml" up -d
   wait_healthy
 }
