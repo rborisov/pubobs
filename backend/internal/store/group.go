@@ -52,7 +52,7 @@ func (s *Store) RemoveGroupMember(ctx context.Context, groupID, userID string) e
 
 func (s *Store) GetGroupMembers(ctx context.Context, groupID string) ([]*model.User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT u.id, u.email, u.name, u.is_instance_admin, u.is_banned, u.created_at
+		SELECT u.id, u.email, u.name, u.is_instance_admin, u.is_banned, u.is_admin, u.created_at
 		FROM users u
 		JOIN group_members gm ON gm.user_id = u.id
 		WHERE gm.group_id=?`, groupID)

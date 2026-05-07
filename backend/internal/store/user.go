@@ -31,17 +31,17 @@ func (s *Store) UpsertUser(ctx context.Context, id, email, name string) (*model.
 
 func (s *Store) GetUserByID(ctx context.Context, id string) (*model.User, error) {
 	return scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, email, name, is_instance_admin, is_banned, created_at FROM users WHERE id=?`, id))
+		`SELECT id, email, name, is_instance_admin, is_banned, is_admin, created_at FROM users WHERE id=?`, id))
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
 	return scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, email, name, is_instance_admin, is_banned, created_at FROM users WHERE email=?`, email))
+		`SELECT id, email, name, is_instance_admin, is_banned, is_admin, created_at FROM users WHERE email=?`, email))
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, email, name, is_instance_admin, is_banned, created_at FROM users ORDER BY created_at`)
+		`SELECT id, email, name, is_instance_admin, is_banned, is_admin, created_at FROM users ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -65,7 +65,7 @@ func (s *Store) SetInstanceAdmin(ctx context.Context, userID string, admin bool)
 
 func (s *Store) ListInstanceAdmins(ctx context.Context) ([]*model.User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, email, name, is_instance_admin, is_banned, created_at FROM users WHERE is_instance_admin=1`)
+		`SELECT id, email, name, is_instance_admin, is_banned, is_admin, created_at FROM users WHERE is_instance_admin=1`)
 	if err != nil {
 		return nil, fmt.Errorf("list admins: %w", err)
 	}
@@ -94,8 +94,8 @@ type scanner interface {
 
 func scanUser(row scanner) (*model.User, error) {
 	var u model.User
-	var admin, banned int
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &admin, &banned, &u.CreatedAt)
+	var admin, banned, isAdmin int
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &admin, &banned, &isAdmin, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -104,5 +104,12 @@ func scanUser(row scanner) (*model.User, error) {
 	}
 	u.IsInstanceAdmin = admin == 1
 	u.IsBanned = banned == 1
+	u.IsAdmin = isAdmin == 1
 	return &u, nil
+}
+
+func (s *Store) SetUserAdmin(ctx context.Context, userID string, admin bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET is_admin=? WHERE id=?`, admin, userID)
+	return err
 }
