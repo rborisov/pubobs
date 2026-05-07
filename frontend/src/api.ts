@@ -22,12 +22,24 @@ export interface User {
   name: string;
   is_instance_admin: boolean;
   is_banned: boolean;
+  is_admin: boolean;
 }
 
 export interface AllowlistEntry {
   id: string;
   pattern: string;
   created_at: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+}
+
+export interface GroupMember {
+  group_id: string;
+  user_id: string;
+  role: string; // "member" | "admin"
 }
 
 export interface Me extends User {}
@@ -222,6 +234,59 @@ export async function addAllowlistEntry(pattern: string): Promise<AllowlistEntry
 
 export async function removeAllowlistEntry(id: string): Promise<void> {
   const resp = await authedFetch(`/api/admin/allowlist/${id}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function listGroups(): Promise<Group[]> {
+  return json<Group[]>(await authedFetch('/api/admin/groups'));
+}
+
+export async function createGroup(name: string): Promise<Group> {
+  return json(await authedFetch('/api/admin/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }));
+}
+
+export async function deleteGroup(id: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/groups/${id}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function listGroupMembers(groupId: string): Promise<GroupMember[]> {
+  return json<GroupMember[]>(await authedFetch(`/api/admin/groups/${groupId}/members`));
+}
+
+export async function addGroupMember(groupId: string, userId: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/groups/${groupId}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function removeGroupMember(groupId: string, userId: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/groups/${groupId}/members/${userId}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setGroupMemberRole(groupId: string, userId: string, role: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/groups/${groupId}/members/${userId}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setUserIsAdmin(id: string, admin: boolean): Promise<void> {
+  const resp = await authedFetch(`/api/admin/users/${id}/user-admin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admin }),
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
