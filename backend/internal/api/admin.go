@@ -98,6 +98,9 @@ func handleAdminImportRepo(deps *Deps) http.HandlerFunc {
 }
 
 func importRepoFromGit(ctx context.Context, deps *Deps, repoID, syncedBy string) (int, error) {
+	if deps.Cache == nil {
+		return 0, nil
+	}
 	repo, err := deps.Store.GetRepo(ctx, repoID)
 	if err != nil || repo == nil {
 		return 0, fmt.Errorf("repo not found")
