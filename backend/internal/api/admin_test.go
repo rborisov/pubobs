@@ -89,6 +89,67 @@ func TestAdminCreateRepo_regularUser_forbidden(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rr.Code)
 }
 
+func setupUserAdminWithRepo(t *testing.T, deps *api.Deps) (userID, repoID string) {
+	t.Helper()
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	repo, _ := deps.Store.CreateRepo(ctx, "r1", "Repo", "https://x.com/r.git", "creds", "main")
+	deps.Store.GrantAccess(ctx, "acc1", repo.ID, "user", "ua1", "admin")
+	return "ua1", repo.ID
+}
+
+func TestAdminUpdateRepo_userAdmin(t *testing.T) {
+	deps := newTestDeps(t)
+	userID, repoID := setupUserAdminWithRepo(t, deps)
+
+	body := `{"name":"Updated","remote_url":"https://x.com/r.git","default_branch":"main","username":"","password":""}`
+	req := httptest.NewRequest("PUT", "/api/admin/repos/"+repoID, strings.NewReader(body))
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, userID, "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code, rr.Body.String())
+}
+
+func TestAdminUpdateRepo_userAdmin_noAccess_forbidden(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+	deps.Store.CreateRepo(ctx, "r1", "Repo", "https://x.com/r.git", "c", "main")
+
+	body := `{"name":"Hack","remote_url":"https://x.com/r.git","default_branch":"main","username":"","password":""}`
+	req := httptest.NewRequest("PUT", "/api/admin/repos/r1", strings.NewReader(body))
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusForbidden, rr.Code)
+}
+
+func TestAdminDeleteRepo_userAdmin(t *testing.T) {
+	deps := newTestDeps(t)
+	userID, repoID := setupUserAdminWithRepo(t, deps)
+
+	req := httptest.NewRequest("DELETE", "/api/admin/repos/"+repoID, nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, userID, "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+}
+
+func TestAdminListUsers_userAdmin(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "ua1", "ua@x.com", "UA")
+	deps.Store.SetUserAdmin(ctx, "ua1", true)
+
+	req := httptest.NewRequest("GET", "/api/admin/users", nil)
+	req.Header.Set("Authorization", bearerHeaderUserAdmin(t, deps, "ua1", "ua@x.com"))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
 func TestAdminSetUserAdmin(t *testing.T) {
 	deps := newTestDeps(t)
 	ctx := context.Background()

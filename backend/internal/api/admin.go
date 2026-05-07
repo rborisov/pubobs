@@ -89,10 +89,10 @@ func handleAdminCreateRepo(deps *Deps) http.HandlerFunc {
 func handleAdminImportRepo(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		id := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, id, w) {
 			return
 		}
-		id := chi.URLParam(r, "id")
 		n, err := importRepoFromGit(r.Context(), deps, id, claims.UserID)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "import failed: "+err.Error())
@@ -141,10 +141,10 @@ func importRepoFromGit(ctx context.Context, deps *Deps, repoID, syncedBy string)
 func handleAdminUpdateRepo(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		id := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, id, w) {
 			return
 		}
-		id := chi.URLParam(r, "id")
 		var body struct {
 			Name          string `json:"name"`
 			RemoteURL     string `json:"remote_url"`
@@ -173,10 +173,10 @@ func handleAdminUpdateRepo(deps *Deps) http.HandlerFunc {
 func handleAdminSetRepoGuestAccess(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		id := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, id, w) {
 			return
 		}
-		id := chi.URLParam(r, "id")
 		var body struct {
 			AllowGuest bool `json:"allow_guest"`
 		}
@@ -195,10 +195,10 @@ func handleAdminSetRepoGuestAccess(deps *Deps) http.HandlerFunc {
 func handleAdminDeleteRepo(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		id := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, id, w) {
 			return
 		}
-		id := chi.URLParam(r, "id")
 		if deps.Cache != nil {
 			deps.Cache.Evict(id)
 		}
@@ -213,10 +213,10 @@ func handleAdminDeleteRepo(deps *Deps) http.HandlerFunc {
 func handleAdminGrantAccess(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		repoID := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, repoID, w) {
 			return
 		}
-		repoID := chi.URLParam(r, "id")
 		var body struct {
 			PrincipalType string `json:"principal_type"`
 			PrincipalID   string `json:"principal_id"`
@@ -237,7 +237,8 @@ func handleAdminGrantAccess(deps *Deps) http.HandlerFunc {
 func handleAdminRevokeAccess(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		repoID := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, repoID, w) {
 			return
 		}
 		accessID := chi.URLParam(r, "accessID")
@@ -252,10 +253,10 @@ func handleAdminRevokeAccess(deps *Deps) http.HandlerFunc {
 func handleAdminListRepoAccess(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		repoID := chi.URLParam(r, "id")
+		if !requireRepoManage(r.Context(), deps, claims, repoID, w) {
 			return
 		}
-		repoID := chi.URLParam(r, "id")
 		entries, err := deps.Store.ListRepoAccess(r.Context(), repoID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "list access failed")
@@ -279,7 +280,7 @@ func handleAdminListRepoAccess(deps *Deps) http.HandlerFunc {
 func handleAdminListUsers(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if !requireAdmin(claims, w) {
+		if !requireAnyAdmin(claims, w) {
 			return
 		}
 		users, err := deps.Store.ListUsers(r.Context())
