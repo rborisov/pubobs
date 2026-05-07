@@ -1,6 +1,6 @@
-import { listUsers, setUserAdmin, setUserBanned, type User } from '../api';
+import { listUsers, setUserAdmin, setUserBanned, setUserIsAdmin, type User, type Me } from '../api';
 
-export async function usersView(): Promise<HTMLElement> {
+export async function usersView(me: Me): Promise<HTMLElement> {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:900px;margin:0 auto;padding:32px 24px;font-family:system-ui,sans-serif';
 
@@ -19,15 +19,15 @@ export async function usersView(): Promise<HTMLElement> {
 
   const tableWrap = document.createElement('div');
   wrap.appendChild(tableWrap);
-  renderTable(tableWrap, users, async () => {
+  renderTable(tableWrap, users, me, async () => {
     users = await listUsers();
-    renderTable(tableWrap, users, async () => {/* handled recursively */});
+    renderTable(tableWrap, users, me, async () => {/* handled recursively */});
   });
 
   return wrap;
 }
 
-function renderTable(container: HTMLElement, users: User[], refresh: () => Promise<void>): void {
+function renderTable(container: HTMLElement, users: User[], me: Me, refresh: () => Promise<void>): void {
   container.innerHTML = '';
 
   if (users.length === 0) {
@@ -65,33 +65,48 @@ function renderTable(container: HTMLElement, users: User[], refresh: () => Promi
     const actionsCell = document.createElement('td');
     actionsCell.style.cssText = 'white-space:nowrap;display:flex;gap:8px';
 
-    const adminBtn = mkBtn(user.is_instance_admin ? 'Remove admin' : 'Make admin', 'link');
-    adminBtn.addEventListener('click', async () => {
-      adminBtn.disabled = true;
-      try {
-        await setUserAdmin(user.id, !user.is_instance_admin);
-        await refresh();
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : String(e));
-        adminBtn.disabled = false;
-      }
-    });
+    if (me.is_instance_admin) {
+      const adminBtn = mkBtn(user.is_instance_admin ? 'Remove superadmin' : 'Make superadmin', 'link');
+      adminBtn.addEventListener('click', async () => {
+        adminBtn.disabled = true;
+        try {
+          await setUserAdmin(user.id, !user.is_instance_admin);
+          await refresh();
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+          adminBtn.disabled = false;
+        }
+      });
+      actionsCell.appendChild(adminBtn);
 
-    const banBtn = mkBtn(user.is_banned ? 'Unban' : 'Ban', user.is_banned ? 'link' : 'link-danger');
-    banBtn.addEventListener('click', async () => {
-      if (!user.is_banned && !confirm(`Ban ${user.email}? They will be locked out immediately.`)) return;
-      banBtn.disabled = true;
-      try {
-        await setUserBanned(user.id, !user.is_banned);
-        await refresh();
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : String(e));
-        banBtn.disabled = false;
-      }
-    });
-
-    actionsCell.appendChild(adminBtn);
-    actionsCell.appendChild(banBtn);
+      const banBtn = mkBtn(user.is_banned ? 'Unban' : 'Ban', user.is_banned ? 'link' : 'link-danger');
+      banBtn.addEventListener('click', async () => {
+        if (!user.is_banned && !confirm(`Ban ${user.email}? They will be locked out immediately.`)) return;
+        banBtn.disabled = true;
+        try {
+          await setUserBanned(user.id, !user.is_banned);
+          await refresh();
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+          banBtn.disabled = false;
+        }
+      });
+      actionsCell.appendChild(banBtn);
+    } else {
+      // is_admin user: only toggle is_admin flag
+      const userAdminBtn = mkBtn(user.is_admin ? 'Remove admin' : 'Make admin', 'link');
+      userAdminBtn.addEventListener('click', async () => {
+        userAdminBtn.disabled = true;
+        try {
+          await setUserIsAdmin(user.id, !user.is_admin);
+          await refresh();
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+          userAdminBtn.disabled = false;
+        }
+      });
+      actionsCell.appendChild(userAdminBtn);
+    }
 
     row.appendChild(emailCell);
     row.appendChild(nameCell);
