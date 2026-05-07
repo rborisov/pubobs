@@ -76,17 +76,20 @@ func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
 	_, err := g.run("", "clone", "--depth=1", "--branch", branch, "--single-branch", authedURL, dir)
 	if err != nil {
-		// If branch doesn't exist yet (fresh bare repo), clone without --branch
+		firstErr := err
 		_, err = g.run("", "clone", "--depth=1", authedURL, dir)
+		if err != nil {
+			return fmt.Errorf("clone with branch %q failed (%v); branchless clone also failed: %w", branch, firstErr, err)
+		}
 	}
 	return err
 }
 
-// FetchReset fetches the latest commit (depth=1) and hard-resets to it.
-// It replaces the old Pull method.
-func (g *GitRunner) FetchReset(dir, remoteURL, credJSON string) error {
+// FetchReset fetches the latest commit (depth=1) for branch and hard-resets to it.
+// Fetching by name (no :<dst>) avoids non-fast-forward rejection on shallow clones.
+func (g *GitRunner) FetchReset(dir, remoteURL, credJSON, branch string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
-	if _, err := g.run(dir, "fetch", "--depth=1", authedURL); err != nil {
+	if _, err := g.run(dir, "fetch", "--depth=1", authedURL, branch); err != nil {
 		return err
 	}
 	_, err := g.run(dir, "reset", "--hard", "FETCH_HEAD")

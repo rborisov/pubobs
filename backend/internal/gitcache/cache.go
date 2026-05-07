@@ -66,7 +66,7 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 			return "", fmt.Errorf("clone %s: %w", repo.RemoteURL, err)
 		}
 	} else {
-		if err := c.git.FetchReset(dir, repo.RemoteURL, credJSON); err != nil {
+		if err := c.git.FetchReset(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
 			return "", fmt.Errorf("fetch-reset %s: %w", repo.ID, err)
 		}
 	}

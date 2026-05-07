@@ -4,11 +4,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/stretchr/testify/require"
 )
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=t@x.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=t@x.com",
+	)
+	require.NoError(t, cmd.Run())
+}
 
 // newBareRepo creates a temporary bare git repo and returns its path.
 func newBareRepo(t *testing.T) string {
@@ -23,20 +35,11 @@ func newBareRepo(t *testing.T) string {
 func seedBareRepo(t *testing.T, bareURL string) {
 	t.Helper()
 	work := t.TempDir()
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = work
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=t@x.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=t@x.com",
-		)
-		require.NoError(t, cmd.Run())
-	}
-	run("clone", bareURL, ".")
+	runGit(t, work, "clone", bareURL, ".")
 	os.WriteFile(filepath.Join(work, "hello.md"), []byte("# Hello"), 0644)
-	run("add", ".")
-	run("commit", "-m", "initial")
-	run("push", "origin", "HEAD:main")
+	runGit(t, work, "add", ".")
+	runGit(t, work, "commit", "-m", "initial")
+	runGit(t, work, "push", "origin", "HEAD:main")
 }
 
 func TestCloneAndListFiles(t *testing.T) {
@@ -94,23 +97,20 @@ func TestFetchReset(t *testing.T) {
 
 	// Push a second commit to the remote
 	work := t.TempDir()
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = work
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=t@x.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=t@x.com",
-		)
-		require.NoError(t, cmd.Run())
-	}
-	run("clone", bareURL, ".")
+	runGit(t, work, "clone", bareURL, ".")
 	os.WriteFile(filepath.Join(work, "second.md"), []byte("# Two"), 0644)
-	run("add", ".")
-	run("commit", "-m", "second")
-	run("push", "origin", "HEAD:main")
+	runGit(t, work, "add", ".")
+	runGit(t, work, "commit", "-m", "second")
+	runGit(t, work, "push", "origin", "HEAD:main")
 
-	// FetchReset should bring the new file into the clone
-	require.NoError(t, g.FetchReset(cloneDir, bareURL, ""))
+	require.NoError(t, g.FetchReset(cloneDir, bareURL, "", "main"))
 	_, err := os.Stat(filepath.Join(cloneDir, "second.md"))
 	require.NoError(t, err, "second.md should exist after FetchReset")
+
+	remoteHead, err := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
+	require.NoError(t, err)
+	localHead, err := exec.Command("git", "-C", cloneDir, "rev-parse", "HEAD").Output()
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(string(remoteHead)), strings.TrimSpace(string(localHead)),
+		"local HEAD should match remote HEAD after FetchReset")
 }
