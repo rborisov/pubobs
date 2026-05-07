@@ -95,12 +95,13 @@ install_docker() {
 
 sparse_clone() {
   local dest="$1"
-  git clone --branch main --filter=blob:none --sparse "$REPO_URL" "$dest"
+  git clone --branch main --filter=blob:none --no-checkout "$REPO_URL" "$dest"
+  git -C "$dest" sparse-checkout init --no-cone
   git -C "$dest" sparse-checkout set \
-    --no-cone \
     '/*' \
     '!/backend/bin/' \
     "backend/bin/pubobs-linux-${ARCH_NAME}"
+  git -C "$dest" checkout main
 }
 
 save_version() {
