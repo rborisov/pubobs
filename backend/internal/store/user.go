@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pubobs/backend/internal/model"
@@ -18,6 +19,11 @@ func (s *Store) UpsertUser(ctx context.Context, id, email, name string) (*model.
 		id, email, name, time.Now().UTC(),
 	)
 	if err != nil {
+		// Email uniqueness conflict: a different OIDC account already holds this email.
+		// Fall back to the existing account — email is the verified identity anchor.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: users.email") {
+			return s.GetUserByEmail(ctx, email)
+		}
 		return nil, fmt.Errorf("upsert user: %w", err)
 	}
 	return s.GetUserByID(ctx, id)

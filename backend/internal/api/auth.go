@@ -84,6 +84,7 @@ func handleAuthCallback(deps *Deps) http.HandlerFunc {
 
 		user, err := deps.Store.UpsertUser(r.Context(), claims.Subject, claims.Email, claims.Name)
 		if err != nil {
+			log.Printf("upsert user failed (subject=%s email=%s): %v", claims.Subject, claims.Email, err)
 			writeError(w, http.StatusInternalServerError, "upsert user failed")
 			return
 		}
