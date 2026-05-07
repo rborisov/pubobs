@@ -16,7 +16,14 @@ import (
 
 func bearerHeader(t *testing.T, deps *api.Deps, userID, email string, isAdmin bool) string {
 	t.Helper()
-	token, err := auth.IssueAccessToken(deps.Config.SecretKey, userID, email, isAdmin, time.Hour)
+	token, err := auth.IssueAccessToken(deps.Config.SecretKey, userID, email, isAdmin, false, time.Hour)
+	require.NoError(t, err)
+	return "Bearer " + token
+}
+
+func bearerHeaderUserAdmin(t *testing.T, deps *api.Deps, userID, email string) string {
+	t.Helper()
+	token, err := auth.IssueAccessToken(deps.Config.SecretKey, userID, email, false, true, time.Hour)
 	require.NoError(t, err)
 	return "Bearer " + token
 }

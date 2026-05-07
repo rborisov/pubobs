@@ -18,7 +18,7 @@ func testKey() []byte {
 
 func TestIssueAndVerifyAccessToken(t *testing.T) {
 	key := testKey()
-	token, err := auth.IssueAccessToken(key, "user-1", "alice@x.com", false, 24*time.Hour)
+	token, err := auth.IssueAccessToken(key, "user-1", "alice@x.com", false, false, 24*time.Hour)
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 
@@ -27,11 +27,12 @@ func TestIssueAndVerifyAccessToken(t *testing.T) {
 	require.Equal(t, "user-1", claims.UserID)
 	require.Equal(t, "alice@x.com", claims.Email)
 	require.False(t, claims.IsAdmin)
+	require.False(t, claims.IsUserAdmin)
 }
 
 func TestAccessToken_expired(t *testing.T) {
 	key := testKey()
-	token, _ := auth.IssueAccessToken(key, "u1", "a@x.com", false, -1*time.Second)
+	token, _ := auth.IssueAccessToken(key, "u1", "a@x.com", false, false, -1*time.Second)
 	_, err := auth.VerifyAccessToken(key, token)
 	require.Error(t, err)
 }
@@ -48,7 +49,18 @@ func TestIssueAndVerifyRefreshToken(t *testing.T) {
 
 func TestRefreshToken_wrongType(t *testing.T) {
 	key := testKey()
-	accessToken, _ := auth.IssueAccessToken(key, "u1", "a@x.com", false, time.Hour)
+	accessToken, _ := auth.IssueAccessToken(key, "u1", "a@x.com", false, false, time.Hour)
 	_, err := auth.VerifyRefreshToken(key, accessToken)
 	require.Error(t, err)
+}
+
+func TestIssueAccessToken_withUserAdmin(t *testing.T) {
+	key := testKey()
+	token, err := auth.IssueAccessToken(key, "u1", "a@x.com", false, true, time.Hour)
+	require.NoError(t, err)
+
+	claims, err := auth.VerifyAccessToken(key, token)
+	require.NoError(t, err)
+	require.False(t, claims.IsAdmin)
+	require.True(t, claims.IsUserAdmin)
 }

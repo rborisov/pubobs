@@ -9,16 +9,18 @@ import (
 )
 
 type AccessClaims struct {
-	UserID  string
-	Email   string
-	IsAdmin bool
+	UserID      string
+	Email       string
+	IsAdmin     bool // is_instance_admin
+	IsUserAdmin bool // is_admin user flag
 }
 
 type accessJWTClaims struct {
 	jwt.RegisteredClaims
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"is_admin"`
-	Type    string `json:"type"`
+	Email       string `json:"email"`
+	IsAdmin     bool   `json:"is_admin"`
+	IsUserAdmin bool   `json:"is_user_admin"`
+	Type        string `json:"type"`
 }
 
 type refreshJWTClaims struct {
@@ -26,16 +28,17 @@ type refreshJWTClaims struct {
 	Type string `json:"type"`
 }
 
-func IssueAccessToken(key []byte, userID, email string, isAdmin bool, ttl time.Duration) (string, error) {
+func IssueAccessToken(key []byte, userID, email string, isAdmin, isUserAdmin bool, ttl time.Duration) (string, error) {
 	claims := accessJWTClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 		},
-		Email:   email,
-		IsAdmin: isAdmin,
-		Type:    "access",
+		Email:       email,
+		IsAdmin:     isAdmin,
+		IsUserAdmin: isUserAdmin,
+		Type:        "access",
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(key)
 }
@@ -55,9 +58,10 @@ func VerifyAccessToken(key []byte, tokenStr string) (*AccessClaims, error) {
 		return nil, errors.New("not an access token")
 	}
 	return &AccessClaims{
-		UserID:  claims.Subject,
-		Email:   claims.Email,
-		IsAdmin: claims.IsAdmin,
+		UserID:      claims.Subject,
+		Email:       claims.Email,
+		IsAdmin:     claims.IsAdmin,
+		IsUserAdmin: claims.IsUserAdmin,
 	}, nil
 }
 

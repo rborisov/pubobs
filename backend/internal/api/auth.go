@@ -123,7 +123,7 @@ func handleToken(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "user not found")
 			return
 		}
-		issueTokenPair(w, deps, user.ID, user.Email, user.IsInstanceAdmin)
+		issueTokenPair(w, deps, user.ID, user.Email, user.IsInstanceAdmin, user.IsAdmin)
 	}
 }
 
@@ -150,7 +150,7 @@ func handleRefresh(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "account suspended")
 			return
 		}
-		issueTokenPair(w, deps, user.ID, user.Email, user.IsInstanceAdmin)
+		issueTokenPair(w, deps, user.ID, user.Email, user.IsInstanceAdmin, user.IsAdmin)
 	}
 }
 
@@ -198,8 +198,8 @@ func serveAuthSuccess(w http.ResponseWriter, redirectURL string) {
 </html>`, redirectURL)
 }
 
-func issueTokenPair(w http.ResponseWriter, deps *Deps, userID, email string, isAdmin bool) {
-	access, err := auth.IssueAccessToken(deps.Config.SecretKey, userID, email, isAdmin, 24*time.Hour)
+func issueTokenPair(w http.ResponseWriter, deps *Deps, userID, email string, isAdmin, isUserAdmin bool) {
+	access, err := auth.IssueAccessToken(deps.Config.SecretKey, userID, email, isAdmin, isUserAdmin, 24*time.Hour)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue token failed")
 		return

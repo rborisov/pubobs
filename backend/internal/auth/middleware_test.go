@@ -11,7 +11,7 @@ import (
 
 func TestRequireAuth_valid(t *testing.T) {
 	key := testKey()
-	token, _ := auth.IssueAccessToken(key, "user-1", "alice@x.com", false, 3600*1e9)
+	token, _ := auth.IssueAccessToken(key, "user-1", "alice@x.com", false, false, 3600*1e9)
 
 	called := false
 	handler := auth.RequireAuth(key)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
