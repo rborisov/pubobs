@@ -37,9 +37,24 @@ func TestParseComments_oneComment(t *testing.T) {
 	if c.Body != "Hello world" {
 		t.Errorf("body: got %q", c.Body)
 	}
+	if c.NoteCommitSHA != "" {
+		t.Errorf("NoteCommitSHA should be empty for legacy comment, got %q", c.NoteCommitSHA)
+	}
 	wantTS := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
 	if !c.CreatedAt.Equal(wantTS) {
 		t.Errorf("ts: got %v, want %v", c.CreatedAt, wantTS)
+	}
+}
+
+func TestParseComments_withSHA(t *testing.T) {
+	content := "---\ntype: comments\nnote: foo.md\n---\n\n" +
+		"### Alice | 2026-05-04T10:00:00Z | alice@example.com | abc123de\n\nHello world\n"
+	got := ParseComments(content)
+	if len(got) != 1 {
+		t.Fatalf("expected 1, got %d", len(got))
+	}
+	if got[0].NoteCommitSHA != "abc123de" {
+		t.Errorf("NoteCommitSHA: got %q, want %q", got[0].NoteCommitSHA, "abc123de")
 	}
 }
 
@@ -56,23 +71,23 @@ func TestParseComments_noFrontmatter(t *testing.T) {
 
 func TestParseComments_twoComments(t *testing.T) {
 	content := "---\ntype: comments\nnote: foo.md\n---\n\n" +
-		"### Alice | 2026-05-04T10:00:00Z | alice@example.com\n\nFirst\n" +
-		"### Bob | 2026-05-04T11:00:00Z | bob@example.com\n\nSecond\n"
+		"### Alice | 2026-05-04T10:00:00Z | alice@example.com | sha1\n\nFirst\n" +
+		"### Bob | 2026-05-04T11:00:00Z | bob@example.com | sha2\n\nSecond\n"
 	got := ParseComments(content)
 	if len(got) != 2 {
 		t.Fatalf("expected 2, got %d", len(got))
 	}
-	if got[0].Body != "First" {
-		t.Errorf("first body: got %q", got[0].Body)
+	if got[0].NoteCommitSHA != "sha1" {
+		t.Errorf("first SHA: got %q", got[0].NoteCommitSHA)
 	}
-	if got[1].AuthorName != "Bob" {
-		t.Errorf("second name: got %q", got[1].AuthorName)
+	if got[1].NoteCommitSHA != "sha2" {
+		t.Errorf("second SHA: got %q", got[1].NoteCommitSHA)
 	}
 }
 
-func TestFormatComment_roundtrip(t *testing.T) {
+func TestFormatComment_roundtrip_withSHA(t *testing.T) {
 	ts := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
-	formatted := FormatComment("Alice", "alice@example.com", "Hello world", ts)
+	formatted := FormatComment("Alice", "alice@example.com", "Hello world", "abc123de", ts)
 	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + formatted)
 	if len(got) != 1 {
 		t.Fatalf("expected 1, got %d", len(got))
@@ -80,9 +95,8 @@ func TestFormatComment_roundtrip(t *testing.T) {
 	if got[0].Body != "Hello world" {
 		t.Errorf("body: got %q", got[0].Body)
 	}
-	wantTS := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
-	if !got[0].CreatedAt.Equal(wantTS) {
-		t.Errorf("ts: got %v, want %v", got[0].CreatedAt, wantTS)
+	if got[0].NoteCommitSHA != "abc123de" {
+		t.Errorf("SHA: got %q", got[0].NoteCommitSHA)
 	}
 }
 

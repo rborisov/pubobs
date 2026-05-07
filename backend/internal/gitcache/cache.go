@@ -222,7 +222,7 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	block := FormatComment(authorName, authorEmail, body, time.Now().UTC())
+	block := FormatComment(authorName, authorEmail, body, "", time.Now().UTC())
 
 	var content string
 	if len(existing) == 0 {

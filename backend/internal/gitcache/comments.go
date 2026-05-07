@@ -8,10 +8,11 @@ import (
 
 // ParsedComment is a single comment parsed from a comments markdown file.
 type ParsedComment struct {
-	AuthorName  string
-	AuthorEmail string
-	CreatedAt   time.Time
-	Body        string
+	AuthorName    string
+	AuthorEmail   string
+	CreatedAt     time.Time
+	Body          string
+	NoteCommitSHA string // empty for comments written before SHA tracking was added
 }
 
 // CommentsFilePath derives the comments file path from a note path.
@@ -20,18 +21,20 @@ func CommentsFilePath(notePath string) string {
 	return strings.TrimSuffix(notePath, ".md") + "-comments.md"
 }
 
-// commentsFileHeader returns the frontmatter for a new comments file.
 func commentsFileHeader(notePath string) string {
 	return fmt.Sprintf("---\ntype: comments\nnote: %s\n---\n\n", notePath)
 }
 
 // FormatComment formats a single comment block for appending to a comments file.
-func FormatComment(name, email, body string, ts time.Time) string {
-	return fmt.Sprintf("### %s | %s | %s\n\n%s\n",
-		name, ts.UTC().Format(time.RFC3339), email, strings.TrimSpace(body))
+// noteCommitSHA is the git_commit_sha of the note at the time of posting.
+func FormatComment(name, email, body, noteCommitSHA string, ts time.Time) string {
+	return fmt.Sprintf("### %s | %s | %s | %s\n\n%s\n",
+		name, ts.UTC().Format(time.RFC3339), email, noteCommitSHA, strings.TrimSpace(body))
 }
 
 // ParseComments parses the contents of a comments markdown file into structured comments.
+// The 4th header field (note commit SHA) is optional — legacy comments without it
+// have NoteCommitSHA == "".
 func ParseComments(content string) []ParsedComment {
 	parts := strings.Split(content, "\n### ")
 	start := 1
@@ -48,19 +51,24 @@ func ParseComments(content string) []ParsedComment {
 		header := strings.TrimSpace(part[:nl])
 		body := strings.TrimSpace(part[nl+1:])
 
-		fields := strings.SplitN(header, " | ", 3)
-		if len(fields) != 3 {
+		fields := strings.SplitN(header, " | ", 4)
+		if len(fields) < 3 {
 			continue
 		}
 		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(fields[1]))
 		if err != nil {
 			continue
 		}
+		var sha string
+		if len(fields) == 4 {
+			sha = strings.TrimSpace(fields[3])
+		}
 		out = append(out, ParsedComment{
-			AuthorName:  strings.TrimSpace(fields[0]),
-			AuthorEmail: strings.TrimSpace(fields[2]),
-			CreatedAt:   ts,
-			Body:        body,
+			AuthorName:    strings.TrimSpace(fields[0]),
+			AuthorEmail:   strings.TrimSpace(fields[2]),
+			CreatedAt:     ts,
+			Body:          body,
+			NoteCommitSHA: sha,
 		})
 	}
 	return out
