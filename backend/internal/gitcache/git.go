@@ -71,21 +71,25 @@ func (g *GitRunner) run(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// Clone clones remoteURL into dir. credJSON may be empty for public repos.
+// Clone clones remoteURL into dir using a shallow single-branch clone.
 func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
-	_, err := g.run("", "clone", "--branch", branch, "--single-branch", authedURL, dir)
+	_, err := g.run("", "clone", "--depth=1", "--branch", branch, "--single-branch", authedURL, dir)
 	if err != nil {
 		// If branch doesn't exist yet (fresh bare repo), clone without --branch
-		_, err = g.run("", "clone", authedURL, dir)
+		_, err = g.run("", "clone", "--depth=1", authedURL, dir)
 	}
 	return err
 }
 
-// Pull fetches and fast-forwards the current branch.
-func (g *GitRunner) Pull(dir, remoteURL, credJSON string) error {
+// FetchReset fetches the latest commit (depth=1) and hard-resets to it.
+// It replaces the old Pull method.
+func (g *GitRunner) FetchReset(dir, remoteURL, credJSON string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
-	_, err := g.run(dir, "pull", authedURL)
+	if _, err := g.run(dir, "fetch", "--depth=1", authedURL); err != nil {
+		return err
+	}
+	_, err := g.run(dir, "reset", "--hard", "FETCH_HEAD")
 	return err
 }
 

@@ -83,3 +83,34 @@ func TestLogFile(t *testing.T) {
 	require.Len(t, commits, 1)
 	require.Equal(t, "initial", commits[0].Message)
 }
+
+func TestFetchReset(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	// Push a second commit to the remote
+	work := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=t@x.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=t@x.com",
+		)
+		require.NoError(t, cmd.Run())
+	}
+	run("clone", bareURL, ".")
+	os.WriteFile(filepath.Join(work, "second.md"), []byte("# Two"), 0644)
+	run("add", ".")
+	run("commit", "-m", "second")
+	run("push", "origin", "HEAD:main")
+
+	// FetchReset should bring the new file into the clone
+	require.NoError(t, g.FetchReset(cloneDir, bareURL, ""))
+	_, err := os.Stat(filepath.Join(cloneDir, "second.md"))
+	require.NoError(t, err, "second.md should exist after FetchReset")
+}
