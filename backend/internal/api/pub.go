@@ -173,20 +173,30 @@ func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoI
 		return
 	}
 
+	var currentSHA string
+	if note, _ := deps.Store.GetNote(r.Context(), repoID, notePath); note != nil {
+		if snap, _ := deps.Store.GetSnapshot(r.Context(), note.ID); snap != nil {
+			currentSHA = snap.GitCommitSHA
+		}
+	}
+
 	type item struct {
 		AuthorName  string `json:"author_name"`
 		AuthorEmail string `json:"author_email"`
 		CreatedAt   string `json:"created_at"`
 		Body        string `json:"body"`
+		IsOutdated  bool   `json:"is_outdated"`
 	}
 	parsed := gitcache.ParseComments(raw)
 	out := make([]item, 0, len(parsed))
 	for _, c := range parsed {
+		isOutdated := c.NoteCommitSHA != "" && currentSHA != "" && c.NoteCommitSHA != currentSHA
 		out = append(out, item{
 			AuthorName:  c.AuthorName,
 			AuthorEmail: c.AuthorEmail,
 			CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			Body:        c.Body,
+			IsOutdated:  isOutdated,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -60,7 +60,7 @@ func TestCache_AppendComment(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := cache.AppendComment(ctx, repo, "", "notes/test.md", "Alice", "alice@example.com", "Hello world")
+	err := cache.AppendComment(ctx, repo, "", "notes/test.md", "Alice", "alice@example.com", "Hello world", "sha1")
 	require.NoError(t, err)
 
 	commentsPath := filepath.Join(cacheDir, "r2", "notes", "test-comments.md")
@@ -73,7 +73,7 @@ func TestCache_AppendComment(t *testing.T) {
 	require.Contains(t, content, "alice@example.com", "should contain author email")
 	require.Contains(t, content, "Hello world", "should contain comment body")
 
-	err = cache.AppendComment(ctx, repo, "", "notes/test.md", "Bob", "bob@example.com", "Second comment")
+	err = cache.AppendComment(ctx, repo, "", "notes/test.md", "Bob", "bob@example.com", "Second comment", "sha2")
 	require.NoError(t, err)
 
 	data, err = os.ReadFile(commentsPath)

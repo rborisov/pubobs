@@ -84,7 +84,7 @@ func TestHandleAddComment(t *testing.T) {
 	deps.Store.UpdateRepo(ctx, "r1", "R", bareURL, "", "main")
 	deps.Store.GrantAccess(ctx, "a2", "r1", "user", "u1", "commentator")
 
-	body := `{"body":"Great note!"}`
+	body := `{"body":"Great note!","note_commit_sha":"abc123"}`
 	req := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/comments",
 		strings.NewReader(body))
 	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
@@ -92,4 +92,39 @@ func TestHandleAddComment(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+}
+
+func TestServeListComments_isOutdated(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDeps(t)
+	deps.Cache = gitcache.NewCache(t.TempDir())
+	seedNoteForWiki(t, deps)
+
+	ctx := context.Background()
+	deps.Store.UpdateRepo(ctx, "r1", "R", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a2", "r1", "user", "u1", "commentator")
+
+	// Post a comment stamped with a SHA different from the snapshot's ("abc123")
+	postBody := `{"body":"hello","note_commit_sha":"oldsha"}`
+	postReq := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/comments",
+		strings.NewReader(postBody))
+	postReq.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	postReq.Header.Set("Content-Type", "application/json")
+	postRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(postRR, postReq)
+	require.Equal(t, http.StatusCreated, postRR.Code, postRR.Body.String())
+
+	// List comments — "oldsha" != "abc123" → is_outdated: true
+	listReq := httptest.NewRequest("GET", "/api/repos/r1/notes/docs/intro.md/comments", nil)
+	listReq.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	listRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(listRR, listReq)
+	require.Equal(t, http.StatusOK, listRR.Code)
+
+	var comments []map[string]any
+	require.NoError(t, json.NewDecoder(listRR.Body).Decode(&comments))
+	require.Len(t, comments, 1)
+	require.Equal(t, true, comments[0]["is_outdated"])
 }

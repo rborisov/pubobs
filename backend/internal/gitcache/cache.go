@@ -205,7 +205,8 @@ func (c *Cache) HeadSHA(repoID string) (string, error) {
 
 // AppendComment appends a comment to the note's companion comments file,
 // commits the change, and pushes to the remote.
-func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, notePath, authorName, authorEmail, body string) error {
+// noteCommitSHA is the git_commit_sha of the note at the time of posting.
+func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, notePath, authorName, authorEmail, body, noteCommitSHA string) error {
 	lock := c.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -222,7 +223,7 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	block := FormatComment(authorName, authorEmail, body, "", time.Now().UTC())
+	block := FormatComment(authorName, authorEmail, body, noteCommitSHA, time.Now().UTC())
 
 	var content string
 	if len(existing) == 0 {
