@@ -51,7 +51,7 @@ func TestGetUserRole(t *testing.T) {
 	s.UpsertUser(ctx, "u1", "a@x.com", "A")
 	s.UpsertUser(ctx, "u2", "b@x.com", "B")
 	s.CreateGroup(ctx, "g1", "Readers")
-	s.AddGroupMember(ctx, "g1", "u2")
+	s.AddGroupMember(ctx, "g1", "u2", "member")
 	s.CreateRepo(ctx, "r1", "Repo", "https://x.com/r.git", "c", "main")
 
 	err := s.GrantAccess(ctx, "acc1", "r1", "user", "u1", "editor")
@@ -68,7 +68,7 @@ func TestGetUserRole(t *testing.T) {
 	require.Equal(t, "reader", role)
 
 	// u1 also in group (reader), but direct editor wins
-	s.AddGroupMember(ctx, "g1", "u1")
+	s.AddGroupMember(ctx, "g1", "u1", "member")
 	role, _ = s.GetUserRole(ctx, "u1", "r1")
 	require.Equal(t, "editor", role)
 

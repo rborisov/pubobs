@@ -421,7 +421,7 @@ func handleAdminAddGroupMember(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "user_id is required")
 			return
 		}
-		if err := deps.Store.AddGroupMember(r.Context(), groupID, body.UserID); err != nil {
+		if err := deps.Store.AddGroupMember(r.Context(), groupID, body.UserID, "member"); err != nil {
 			writeError(w, http.StatusInternalServerError, "add member failed")
 			return
 		}

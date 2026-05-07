@@ -37,10 +37,11 @@ func (s *Store) ListGroups(ctx context.Context) ([]*model.Group, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) AddGroupMember(ctx context.Context, groupID, userID string) error {
+func (s *Store) AddGroupMember(ctx context.Context, groupID, userID, role string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?,?)`,
-		groupID, userID)
+		`INSERT INTO group_members (group_id, user_id, role) VALUES (?,?,?)
+         ON CONFLICT(group_id, user_id) DO NOTHING`,
+		groupID, userID, role)
 	return err
 }
 
@@ -69,6 +70,68 @@ func (s *Store) GetGroupMembers(ctx context.Context, groupID string) ([]*model.U
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListGroupMembers(ctx context.Context, groupID string) ([]*model.GroupMember, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT group_id, user_id, role FROM group_members WHERE group_id=? ORDER BY user_id`,
+		groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*model.GroupMember
+	for rows.Next() {
+		var m model.GroupMember
+		if err := rows.Scan(&m.GroupID, &m.UserID, &m.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, &m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) IsGroupAdmin(ctx context.Context, groupID, userID string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id=? AND user_id=? AND role='admin')`,
+		groupID, userID,
+	).Scan(&exists)
+	return exists == 1, err
+}
+
+func (s *Store) SetGroupMemberRole(ctx context.Context, groupID, userID, role string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE group_members SET role=? WHERE group_id=? AND user_id=?`,
+		role, groupID, userID)
+	return err
+}
+
+func (s *Store) ListAdminGroups(ctx context.Context, userID string) ([]*model.Group, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT g.id, g.name, g.created_at
+        FROM groups g
+        JOIN group_members gm ON gm.group_id = g.id
+        WHERE gm.user_id=? AND gm.role='admin'
+        ORDER BY g.name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*model.Group
+	for rows.Next() {
+		var g model.Group
+		if err := rows.Scan(&g.ID, &g.Name, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &g)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteGroup(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE id=?`, id)
+	return err
 }
 
 // GetUserGroupIDs returns all group IDs a user belongs to.
