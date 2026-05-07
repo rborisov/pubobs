@@ -1,7 +1,102 @@
-import { App, TFile, Notice } from 'obsidian';
+import { App, TFile, Notice, Modal, parseYaml, stringifyYaml } from 'obsidian';
 import type { BackendClient, SyncFile, SyncAsset } from './client';
 import type { PubObsSettings } from './types';
 import { renderNoteToHTML, extractStyles } from './renderer';
+
+// ── Exported helpers ─────────────────────────────────────────────────────────
+
+export function semverGte(installed: string, required: string): boolean {
+  const parse = (v: string) => v.split('.').map(n => parseInt(n, 10) || 0);
+  const [iMaj, iMin, iPat] = parse(installed);
+  const [rMaj, rMin, rPat] = parse(required);
+  if (iMaj !== rMaj) return iMaj > rMaj;
+  if (iMin !== rMin) return iMin > rMin;
+  return iPat >= rPat;
+}
+
+export function injectPluginFrontmatter(
+  content: string,
+  plugins: Array<{ id: string; version: string }>,
+): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (fmMatch) {
+    let fm: Record<string, unknown>;
+    try { fm = (parseYaml(fmMatch[1]) as Record<string, unknown>) ?? {}; }
+    catch { fm = {}; }
+
+    if (plugins.length > 0) {
+      fm['pubobs-plugins'] = plugins;
+    } else {
+      delete fm['pubobs-plugins'];
+      if (!fmMatch[1].includes('pubobs-plugins')) return content;
+    }
+    const fmStr = stringifyYaml(fm);
+    return `---\n${fmStr}---\n${content.slice(fmMatch[0].length)}`;
+  }
+  if (plugins.length === 0) return content;
+  const fmStr = stringifyYaml({ 'pubobs-plugins': plugins });
+  return `---\n${fmStr}---\n${content}`;
+}
+
+export function parseFrontmatterPlugins(content: string): Array<{ id: string; version: string }> {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return [];
+  try {
+    const fm = parseYaml(fmMatch[1]) as Record<string, unknown>;
+    const plugins = fm['pubobs-plugins'];
+    if (!Array.isArray(plugins)) return [];
+    return plugins.filter(
+      (p): p is { id: string; version: string } =>
+        typeof p === 'object' && p !== null &&
+        'id' in p && typeof (p as Record<string, unknown>).id === 'string' &&
+        'version' in p && typeof (p as Record<string, unknown>).version === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+// ── Plugin compatibility modal ────────────────────────────────────────────────
+
+interface IncompatibleNote {
+  path: string;
+  missing: string[];
+  content: string;
+  sha: string;
+}
+
+class IncompatibleNotesModal extends Modal {
+  constructor(
+    app: App,
+    private notes: IncompatibleNote[],
+    private onCreateCopies: (notes: IncompatibleNote[]) => Promise<void>,
+    private onSkip: () => void,
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: 'Plugin Compatibility' });
+    contentEl.createEl('p', {
+      text: `${this.notes.length} note(s) require plugin(s) that are not installed:`,
+    });
+    const ul = contentEl.createEl('ul');
+    for (const n of this.notes) {
+      ul.createEl('li', { text: `${n.path} — needs: ${n.missing.join(', ')}` });
+    }
+    contentEl.createEl('p', { text: 'Create local copies linked to the originals instead of pulling?' });
+    const row = contentEl.createDiv({ cls: 'modal-button-container' });
+    const copyBtn = row.createEl('button', { text: 'Create Copies', cls: 'mod-cta' });
+    copyBtn.onclick = () => { this.close(); void this.onCreateCopies(this.notes); };
+    const skipBtn = row.createEl('button', { text: 'Skip' });
+    skipBtn.onclick = () => { this.close(); this.onSkip(); };
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// ── SyncManager ───────────────────────────────────────────────────────────────
 
 export class SyncManager {
   constructor(
@@ -16,6 +111,81 @@ export class SyncManager {
     if (!mapping) throw new Error(`No folder mapping for repo ${repoId}`);
 
     const { vaultFolder, subfolder } = mapping;
+
+    // ── Pull phase ──────────────────────────────────────────────────────────────
+    const notice = new Notice('PubObs: checking for remote changes…', 0);
+    try {
+      const remoteFiles = await this.client.listFiles(repoId);
+      const storedPullSHAs: Record<string, string> = { ...(this.settings.pullSHAs[repoId] ?? {}) };
+      const noteFiles = remoteFiles.filter(f => f.path.endsWith('.md') && !f.path.startsWith('_pubobs/'));
+
+      const incompatible: IncompatibleNote[] = [];
+      const toPull: typeof noteFiles = [];
+
+      for (const file of noteFiles) {
+        if (storedPullSHAs[file.path] === file.sha) continue;
+        const required = parseFrontmatterPlugins(file.content);
+        if (required.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const manifests = (this.app as any).plugins?.manifests ?? {};
+          const missing = required
+            .filter(p => {
+              const installedVersion: string | undefined = manifests[p.id]?.version;
+              return !installedVersion || !semverGte(installedVersion, p.version);
+            })
+            .map(p => {
+              const entry = PLUGIN_PATTERNS.find(pp => pp.id === p.id);
+              return entry ? `${entry.name} v${p.version}` : `${p.id} v${p.version}`;
+            });
+          if (missing.length > 0) {
+            incompatible.push({ path: file.path, missing, content: file.content, sha: file.sha });
+            continue;
+          }
+        }
+        toPull.push(file);
+      }
+
+      let pulled = 0;
+      for (const file of toPull) {
+        const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+        const dir = vaultPath.split('/').slice(0, -1).join('/');
+        if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+          await this.app.vault.createFolder(dir);
+        }
+        const existing = this.app.vault.getAbstractFileByPath(vaultPath);
+        if (existing instanceof TFile) {
+          await this.app.vault.modify(existing, file.content);
+        } else {
+          await this.app.vault.create(vaultPath, file.content);
+        }
+        storedPullSHAs[file.path] = file.sha;
+        pulled++;
+      }
+      this.settings.pullSHAs[repoId] = storedPullSHAs;
+      await this.saveSettings();
+
+      if (incompatible.length > 0) {
+        await new Promise<void>(resolve => {
+          new IncompatibleNotesModal(
+            this.app,
+            incompatible,
+            async (notes) => {
+              for (const n of notes) {
+                await this.createLocalCopy(vaultFolder, subfolder, n);
+              }
+              resolve();
+            },
+            resolve,
+          ).open();
+        });
+      }
+
+      if (pulled > 0) notice.setMessage(`PubObs: pulled ${pulled} note(s), pushing local changes…`);
+    } catch (e) {
+      console.error('[PubObs] pull phase failed:', e);
+    }
+
+    // ── Push phase ────────────────────────────────────────────────────────────
     const vaultFiles = this.app.vault
       .getFiles()
       .filter((f: TFile) => f.extension === 'md' && (vaultFolder === '' || f.path.startsWith(vaultFolder + '/')));
@@ -24,10 +194,9 @@ export class SyncManager {
     const newHashes: Record<string, string> = {};
     const currentRepoPaths = new Set<string>();
 
-    const notice = new Notice(`Checking ${vaultFiles.length} note(s)…`, 0);
+    notice.setMessage(`Checking ${vaultFiles.length} note(s)…`);
     const syncFiles: SyncFile[] = [];
     const assetMap = new Map<string, ArrayBuffer>();
-    const notePlugins: Record<string, string[]> = {};
     let skipped = 0;
 
     for (let i = 0; i < vaultFiles.length; i++) {
@@ -52,9 +221,8 @@ export class SyncManager {
 
         notice.setMessage(`Rendering ${syncFiles.length + 1}: ${f.basename}…`);
         const used = detectPlugins(content);
-        const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId);
+        const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId, used);
         syncFiles.push(syncFile);
-        if (used.length > 0) notePlugins[repoPath] = used;
         for (const [vaultPath, buf] of assets) assetMap.set(vaultPath, buf);
       } catch (e) {
         console.error(`[PubObs] render failed for ${f.path}: ${e}`);
@@ -77,12 +245,6 @@ export class SyncManager {
       content: bufferToBase64(new TextEncoder().encode(css).buffer),
     });
 
-    // Record per-note plugin requirements so pull-in can warn about missing plugins
-    syncAssets.push({
-      path: '_pubobs/note-plugins.json',
-      content: bufferToBase64(new TextEncoder().encode(notePluginsJson(notePlugins)).buffer),
-    });
-
     if (syncFiles.length === 0 && deletedPaths.length === 0) {
       new Notice(`PubObs: nothing changed (${skipped} note(s) up to date)`);
       return;
@@ -99,57 +261,45 @@ export class SyncManager {
     new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged — ${result.commit_sha.slice(0, 7)}`);
   }
 
-  async pullRepo(repoId: string): Promise<void> {
-    const mapping = this.settings.repoMappings[repoId];
-    if (!mapping) throw new Error(`No folder mapping for repo ${repoId}`);
+  private async createLocalCopy(
+    vaultFolder: string,
+    subfolder: string,
+    note: IncompatibleNote,
+  ): Promise<void> {
+    const vaultPath = repoPathToVaultPath(note.path, vaultFolder, subfolder);
+    const ext = '.md';
+    const base = vaultPath.slice(0, -ext.length);
 
-    const { vaultFolder, subfolder } = mapping;
-    const files = await this.client.listFiles(repoId);
-
-    const notePluginsFile = files.find(f => f.path === '_pubobs/note-plugins.json');
-
-    // Only pull .md notes; skip rendered assets like _pubobs/obsidian.css
-    const noteFiles = files.filter(f => f.path.endsWith('.md') && !f.path.startsWith('_pubobs/'));
-
-    const storedSHAs: Record<string, string> = { ...(this.settings.pullSHAs[repoId] ?? {}) };
-    let pulled = 0;
-    let skipped = 0;
-    const pulledPaths: string[] = [];
-
-    for (const file of noteFiles) {
-      if (storedSHAs[file.path] === file.sha) {
-        skipped++;
-        continue;
-      }
-
-      const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
-
-      // Ensure parent directory exists
-      const dir = vaultPath.split('/').slice(0, -1).join('/');
-      if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
-        await this.app.vault.createFolder(dir);
-      }
-
-      const existing = this.app.vault.getAbstractFileByPath(vaultPath);
-      if (existing instanceof TFile) {
-        await this.app.vault.modify(existing, file.content);
-      } else {
-        await this.app.vault.create(vaultPath, file.content);
-      }
-
-      storedSHAs[file.path] = file.sha;
-      pulledPaths.push(file.path);
-      pulled++;
+    let copyPath = `${base}-local-copy${ext}`;
+    let suffix = 2;
+    while (this.app.vault.getAbstractFileByPath(copyPath)) {
+      copyPath = `${base}-local-copy-${suffix}${ext}`;
+      suffix++;
     }
 
-    this.settings.pullSHAs[repoId] = storedSHAs;
-    await this.saveSettings();
+    const fmMatch = note.content.match(/^---\n([\s\S]*?)\n---\n?/);
+    let copyContent: string;
+    if (fmMatch) {
+      let fm: Record<string, unknown>;
+      try { fm = (parseYaml(fmMatch[1]) as Record<string, unknown>) ?? {}; } catch { fm = {}; }
+      fm['pubobs-parent'] = note.path;
+      const fmStr = stringifyYaml(fm);
+      copyContent = `---\n${fmStr}---\n${note.content.slice(fmMatch[0].length)}`;
+    } else {
+      const fmStr = stringifyYaml({ 'pubobs-parent': note.path });
+      copyContent = `---\n${fmStr}---\n${note.content}`;
+    }
 
-    new Notice(`PubObs: pulled ${pulled} file(s), ${skipped} unchanged`);
+    const dir = copyPath.split('/').slice(0, -1).join('/');
+    if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+      await this.app.vault.createFolder(dir);
+    }
 
-    // Warn about missing plugins only for notes that were actually pulled
-    if (notePluginsFile && pulledPaths.length > 0) {
-      warnMissingPlugins(this.app, notePluginsFile.content, pulledPaths);
+    const existing = this.app.vault.getAbstractFileByPath(copyPath);
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, copyContent);
+    } else {
+      await this.app.vault.create(copyPath, copyContent);
     }
   }
 
@@ -159,6 +309,7 @@ export class SyncManager {
     vaultFolder: string,
     subfolder: string,
     repoId: string,
+    detectedPluginIds: string[] = [],
   ): Promise<{ syncFile: SyncFile; assets: Map<string, ArrayBuffer> }> {
     const cache = this.app.metadataCache.getFileCache(file);
     const { position: _pos, ...frontmatter } = ((cache?.frontmatter ?? {}) as Record<string, unknown>);
@@ -169,10 +320,25 @@ export class SyncManager {
     }
     const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manifests = (this.app as any).plugins?.manifests ?? {};
+    const pluginsMeta = detectedPluginIds.map(id => ({
+      id,
+      version: (manifests[id]?.version as string | undefined) ?? '0.0.0',
+    }));
+
+    if (pluginsMeta.length > 0) {
+      frontmatter['pubobs-plugins'] = pluginsMeta;
+    } else {
+      delete frontmatter['pubobs-plugins'];
+    }
+
+    const mdContent = injectPluginFrontmatter(content, pluginsMeta);
+
     const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder);
 
     return {
-      syncFile: { path: repoPath, md_content: content, html_content: html, frontmatter },
+      syncFile: { path: repoPath, md_content: mdContent, html_content: html, frontmatter },
       assets,
     };
   }
@@ -228,35 +394,6 @@ function detectPlugins(content: string): string[] {
   return PLUGIN_PATTERNS
     .filter(p => p.patterns.length > 0 && p.patterns.some(re => re.test(content)))
     .map(p => p.id);
-}
-
-function notePluginsJson(notePlugins: Record<string, string[]>): string {
-  return JSON.stringify(notePlugins, null, 2);
-}
-
-function warnMissingPlugins(app: App, notePluginsJson: string, pulledPaths: string[]): void {
-  let notePlugins: Record<string, string[]>;
-  try { notePlugins = JSON.parse(notePluginsJson); } catch { return; }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const installed: Set<string> = (app as any).plugins?.enabledPlugins ?? new Set();
-  const missingIds = new Set<string>();
-  for (const path of pulledPaths) {
-    for (const id of notePlugins[path] ?? []) {
-      if (!installed.has(id)) missingIds.add(id);
-    }
-  }
-
-  if (missingIds.size > 0) {
-    const names = Array.from(missingIds).map(id => {
-      const entry = PLUGIN_PATTERNS.find(p => p.id === id);
-      return entry ? `• ${entry.name} (${id})` : `• ${id}`;
-    });
-    new Notice(
-      `PubObs: pulled notes require plugin(s) not installed:\n${names.join('\n')}`,
-      8000,
-    );
-  }
 }
 
 /**
