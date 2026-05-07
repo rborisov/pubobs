@@ -1,6 +1,6 @@
-import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo } from '../api';
+import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo, type Me } from '../api';
 
-export async function reposView(_me?: import('../api').Me): Promise<HTMLElement> {
+export async function reposView(me: Me): Promise<HTMLElement> {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:900px;margin:0 auto;padding:32px 24px;font-family:system-ui,sans-serif';
 
@@ -19,38 +19,40 @@ export async function reposView(_me?: import('../api').Me): Promise<HTMLElement>
   title.style.cssText = 'margin:0;font-size:1.25rem;flex:1';
   title.textContent = 'Repos';
   header.appendChild(title);
-  const newBtn = mkBtn('+ New repo', 'primary');
-  header.appendChild(newBtn);
   wrap.appendChild(header);
 
   // Table
   const tableWrap = document.createElement('div');
   wrap.appendChild(tableWrap);
-  renderTable(tableWrap, repos);
+  renderTable(tableWrap, repos, me);
 
   // Create form area
   const formWrap = document.createElement('div');
   wrap.appendChild(formWrap);
 
-  newBtn.addEventListener('click', () => {
-    if (formWrap.firstChild) {
-      formWrap.innerHTML = '';
-      return;
-    }
-    formWrap.appendChild(
-      repoForm(null, async data => {
-        await createRepo(data);
-        repos = await listRepos();
-        renderTable(tableWrap, repos);
+  if (me.is_instance_admin || me.is_admin) {
+    const newBtn = mkBtn('+ New repo', 'primary');
+    header.appendChild(newBtn);
+    newBtn.addEventListener('click', () => {
+      if (formWrap.firstChild) {
         formWrap.innerHTML = '';
-      }, () => { formWrap.innerHTML = ''; })
-    );
-  });
+        return;
+      }
+      formWrap.appendChild(
+        repoForm(null, async data => {
+          await createRepo(data);
+          repos = await listRepos();
+          renderTable(tableWrap, repos, me);
+          formWrap.innerHTML = '';
+        }, () => { formWrap.innerHTML = ''; })
+      );
+    });
+  }
 
   return wrap;
 }
 
-function renderTable(container: HTMLElement, repos: Repo[]): void {
+function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
   container.innerHTML = '';
 
   if (repos.length === 0) {
@@ -72,6 +74,8 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
     const row = document.createElement('tr');
     row.dataset['id'] = repo.id;
 
+    const canManage = me.is_instance_admin || repo.role === 'admin';
+
     const nameCell = document.createElement('td');
     const link = document.createElement('a');
     link.href = `#/repos/${repo.id}`;
@@ -92,20 +96,86 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
     statusCell.style.color = repo.is_cloned ? '#16a34a' : '#94a3b8';
 
     const guestCell = document.createElement('td');
-    const guestBtn = mkBtn(repo.allow_guest ? 'On' : 'Off', repo.allow_guest ? 'toggle-on' : 'toggle-off');
-    guestCell.appendChild(guestBtn);
+    if (canManage) {
+      const guestBtn = mkBtn(repo.allow_guest ? 'On' : 'Off', repo.allow_guest ? 'toggle-on' : 'toggle-off');
+      guestCell.appendChild(guestBtn);
+      guestBtn.addEventListener('click', async () => {
+        const next = !repo.allow_guest;
+        guestBtn.disabled = true;
+        try {
+          await setRepoGuestAccess(repo.id, next);
+          repo.allow_guest = next;
+          guestBtn.textContent = next ? 'On' : 'Off';
+          applyToggleStyle(guestBtn, next);
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+        } finally {
+          guestBtn.disabled = false;
+        }
+      });
+    } else {
+      guestCell.textContent = repo.allow_guest ? 'On' : 'Off';
+      guestCell.style.color = repo.allow_guest ? '#16a34a' : '#94a3b8';
+    }
 
     const actionsCell = document.createElement('td');
     actionsCell.style.whiteSpace = 'nowrap';
 
-    const editBtn = mkBtn('Edit', 'link');
-    editBtn.style.marginRight = '8px';
-    const importBtn = mkBtn('Import', 'link');
-    importBtn.style.marginRight = '8px';
-    const delBtn = mkBtn('Delete', 'link-danger');
-    actionsCell.appendChild(editBtn);
-    actionsCell.appendChild(importBtn);
-    actionsCell.appendChild(delBtn);
+    if (canManage) {
+      const editBtn = mkBtn('Edit', 'link');
+      editBtn.style.marginRight = '8px';
+      const importBtn = mkBtn('Import', 'link');
+      importBtn.style.marginRight = '8px';
+      const delBtn = mkBtn('Delete', 'link-danger');
+      actionsCell.appendChild(editBtn);
+      actionsCell.appendChild(importBtn);
+      actionsCell.appendChild(delBtn);
+
+      editBtn.addEventListener('click', () => {
+        const existing = tbody.querySelector('tr.inline-form');
+        if (existing) existing.remove();
+        if (row.nextSibling && (row.nextSibling as HTMLElement).classList?.contains('inline-form')) return;
+        const formRow = document.createElement('tr');
+        formRow.className = 'inline-form';
+        const formCell = document.createElement('td');
+        formCell.colSpan = 6;
+        formCell.style.padding = '0';
+        formCell.appendChild(
+          repoForm(repo, async data => {
+            await updateRepo(repo.id, data);
+            const fresh = await listRepos();
+            renderTable(container, fresh, me);
+          }, () => { formRow.remove(); })
+        );
+        formRow.appendChild(formCell);
+        row.after(formRow);
+      });
+
+      importBtn.addEventListener('click', async () => {
+        importBtn.textContent = 'Importing…';
+        importBtn.disabled = true;
+        try {
+          const { imported } = await importRepo(repo.id);
+          alert(`Imported ${imported} note(s) from git.`);
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+        } finally {
+          importBtn.textContent = 'Import';
+          importBtn.disabled = false;
+        }
+      });
+
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`Delete repo "${repo.name}"?\n\nThis removes the repo from PubObs (the remote git repo is not affected).`)) return;
+        try {
+          await deleteRepo(repo.id);
+          const fresh = await listRepos();
+          renderTable(container, fresh, me);
+        } catch (e: unknown) {
+          alert(e instanceof Error ? e.message : String(e));
+        }
+      });
+    }
 
     row.appendChild(nameCell);
     row.appendChild(remoteCell);
@@ -114,74 +184,6 @@ function renderTable(container: HTMLElement, repos: Repo[]): void {
     row.appendChild(guestCell);
     row.appendChild(actionsCell);
     tbody.appendChild(row);
-
-    // Inline edit
-    editBtn.addEventListener('click', () => {
-      // Remove any existing inline form in the table
-      const existing = tbody.querySelector('tr.inline-form');
-      if (existing) existing.remove();
-      if (row.nextSibling && (row.nextSibling as HTMLElement).classList?.contains('inline-form')) return;
-
-      const formRow = document.createElement('tr');
-      formRow.className = 'inline-form';
-      const formCell = document.createElement('td');
-      formCell.colSpan = 6;
-      formCell.style.padding = '0';
-
-      formCell.appendChild(
-        repoForm(repo, async data => {
-          await updateRepo(repo.id, data);
-          const fresh = await listRepos();
-          renderTable(container, fresh);
-        }, () => { formRow.remove(); })
-      );
-
-      formRow.appendChild(formCell);
-      row.after(formRow);
-    });
-
-    // Toggle guest access
-    guestBtn.addEventListener('click', async () => {
-      const next = !repo.allow_guest;
-      guestBtn.disabled = true;
-      try {
-        await setRepoGuestAccess(repo.id, next);
-        repo.allow_guest = next;
-        guestBtn.textContent = next ? 'On' : 'Off';
-        applyToggleStyle(guestBtn, next);
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : String(e));
-      } finally {
-        guestBtn.disabled = false;
-      }
-    });
-
-    // Import from git
-    importBtn.addEventListener('click', async () => {
-      importBtn.textContent = 'Importing…';
-      importBtn.disabled = true;
-      try {
-        const { imported } = await importRepo(repo.id);
-        alert(`Imported ${imported} note(s) from git.`);
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : String(e));
-      } finally {
-        importBtn.textContent = 'Import';
-        importBtn.disabled = false;
-      }
-    });
-
-    // Delete
-    delBtn.addEventListener('click', async () => {
-      if (!confirm(`Delete repo "${repo.name}"?\n\nThis removes the repo from PubObs (the remote git repo is not affected).`)) return;
-      try {
-        await deleteRepo(repo.id);
-        const fresh = await listRepos();
-        renderTable(container, fresh);
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
   }
 
   table.appendChild(tbody);
