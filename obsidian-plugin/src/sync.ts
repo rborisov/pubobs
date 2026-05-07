@@ -124,7 +124,8 @@ export class SyncManager {
 
       for (const file of noteFiles) {
         if (storedPullSHAs[file.path] === file.sha) continue;
-        const required = parseFrontmatterPlugins(file.content);
+        const required = parseFrontmatterPlugins(file.content)
+          .filter(p => PLUGIN_PATTERNS.some(pp => pp.id === p.id));
         if (required.length > 0) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const manifests = (this.app as any).plugins?.manifests ?? {};
