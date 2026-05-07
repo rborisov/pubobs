@@ -386,7 +386,6 @@ const PLUGIN_PATTERNS: Array<{ id: string; name: string; patterns: RegExp[] }> =
   { id: 'obsidian-admonition',         name: 'Admonition',       patterns: [/^```ad-\w/m] },
   { id: 'obsidian-map-view',           name: 'Map View',         patterns: [/^```mapview\b/m] },
   { id: 'obsidian-leaflet-plugin',     name: 'Leaflet',          patterns: [/^```leaflet\b/m] },
-  { id: 'table-editor-obsidian',       name: 'Advanced Tables',  patterns: [/^\|.+\|\s*$\n^\|\s*[-:]+[-| :]*\|\s*$/m] },
   { id: 'obsidian-outliner',           name: 'Outliner',         patterns: [] }, // no detectable syntax
 ];
 
