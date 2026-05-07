@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     is_instance_admin INTEGER NOT NULL DEFAULT 0,
     is_banned         INTEGER NOT NULL DEFAULT 0,
+    is_admin          INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE TABLE IF NOT EXISTS group_members (
     group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     user_id  TEXT NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+    role     TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin')),
     PRIMARY KEY (group_id, user_id)
 );
 

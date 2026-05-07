@@ -8,6 +8,7 @@ type User struct {
 	Name            string    `json:"name"`
 	IsInstanceAdmin bool      `json:"is_instance_admin"`
 	IsBanned        bool      `json:"is_banned"`
+	IsAdmin         bool      `json:"is_admin"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 
@@ -21,6 +22,12 @@ type Group struct {
 	ID        string
 	Name      string
 	CreatedAt time.Time
+}
+
+type GroupMember struct {
+	GroupID string `json:"group_id"`
+	UserID  string `json:"user_id"`
+	Role    string `json:"role"` // "member" | "admin"
 }
 
 type Repo struct {

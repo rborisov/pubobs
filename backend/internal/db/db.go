@@ -39,5 +39,17 @@ func Open(dsn string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migrate repos.allow_guest: %w", err)
 		}
 	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate users.is_admin: %w", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE group_members ADD COLUMN role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin'))`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate group_members.role: %w", err)
+		}
+	}
 	return db, nil
 }
