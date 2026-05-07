@@ -73,19 +73,6 @@ func TestAddCommitPush(t *testing.T) {
 	require.Len(t, sha, 40)
 }
 
-func TestLogFile(t *testing.T) {
-	bareURL := newBareRepo(t)
-	seedBareRepo(t, bareURL)
-
-	cloneDir := t.TempDir()
-	g := gitcache.NewGitRunner()
-	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
-
-	commits, err := g.LogFile(cloneDir, "hello.md")
-	require.NoError(t, err)
-	require.Len(t, commits, 1)
-	require.Equal(t, "initial", commits[0].Message)
-}
 
 func TestFetchReset(t *testing.T) {
 	bareURL := newBareRepo(t)

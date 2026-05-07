@@ -147,18 +147,6 @@ func (c *Cache) ListFiles(ctx context.Context, repo *model.Repo, credJSON string
 	return out, nil
 }
 
-// History returns the commit log for a specific file.
-func (c *Cache) History(ctx context.Context, repo *model.Repo, credJSON, filePath string) ([]model.Commit, error) {
-	lock := c.repoLock(repo.ID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	dir, err := c.getOrClone(repo, credJSON)
-	if err != nil {
-		return nil, err
-	}
-	return c.git.LogFile(dir, filePath)
-}
 
 // Evict removes the local clone for a repo.
 func (c *Cache) Evict(repoID string) error {

@@ -49,8 +49,6 @@ func handleNoteGet(deps *Deps) http.HandlerFunc {
 		switch {
 		case strings.HasSuffix(notePath, "/backlinks"):
 			serveBacklinks(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/backlinks"))
-		case strings.HasSuffix(notePath, "/history"):
-			serveHistory(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/history"))
 		case strings.HasSuffix(notePath, "/comments"):
 			serveListComments(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/comments"))
 		default:
@@ -99,27 +97,6 @@ func serveNoteView(w http.ResponseWriter, r *http.Request, deps *Deps, claims *a
 	})
 }
 
-func serveHistory(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
-	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
-	repo, _ := deps.Store.GetRepo(r.Context(), repoID)
-	if repo == nil {
-		writeError(w, http.StatusNotFound, "repo not found")
-		return
-	}
-	credJSON, _ := decryptCreds(deps, repo.EncryptedCreds)
-	commits, err := deps.Cache.History(r.Context(), repo, credJSON, notePath)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "history failed: "+err.Error())
-		return
-	}
-	if commits == nil {
-		commits = []model.Commit{}
-	}
-	writeJSON(w, http.StatusOK, commits)
-}
 
 func serveBacklinks(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
 	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
