@@ -46,3 +46,12 @@ func TestLocalRenderStore_nestedPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("data"), got)
 }
+
+func TestLocalRenderStore_pathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	s := renderstore.NewLocal(dir)
+
+	err := s.Write("repo", "../../../etc/passwd", []byte("malicious"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "escapes render store base dir")
+}
