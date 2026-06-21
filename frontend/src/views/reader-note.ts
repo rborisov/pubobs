@@ -75,9 +75,8 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   copyBtn.className = 'r-btn-ghost';
   copyBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px;margin-left:auto';
   copyBtn.addEventListener('click', () => {
-    const key = urlKey ?? note.render_key;
-    const url = key
-      ? `${location.origin}/#/read/${repoId}/${notePath}&${key}`
+    const url = urlKey
+      ? `${location.origin}/#/read/${repoId}/${notePath}&${urlKey}`
       : `${location.origin}/#/read/${repoId}/${notePath}`;
     navigator.clipboard.writeText(url).then(() => {
       copyBtn.textContent = 'Copied!';
@@ -91,17 +90,19 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const content = document.createElement('div');
   content.className = 'markdown-rendered markdown-preview-view';
 
-  const decryptKey = urlKey ?? note.render_key;
   let htmlContent: string;
-  if (note.render_url && decryptKey) {
+  if (urlKey) {
     try {
-      htmlContent = await decryptRenderBlob(note.render_url, decryptKey);
+      const renderURL = `/pub/${repoId}/render/${encodeURIComponent(notePath)}?key=${urlKey}`;
+      htmlContent = await decryptRenderBlob(renderURL, urlKey);
     } catch (e) {
-      console.error('[PubObs] decryption failed, falling back:', e);
-      htmlContent = note.html_content ?? '';
+      console.error('[PubObs] decryption failed:', e);
+      htmlContent = '<p style="color:#888;font-style:italic">Could not decrypt note content.</p>';
     }
+  } else if (note.html_content) {
+    htmlContent = note.html_content;
   } else {
-    htmlContent = note.html_content ?? '';
+    htmlContent = '<p style="color:#888;font-style:italic">Open this note via a shared link to view its content.</p>';
   }
   content.innerHTML = htmlContent;
   for (const cb of Array.from(content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox'))) {

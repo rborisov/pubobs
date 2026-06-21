@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"mime"
 	"net/http"
@@ -146,17 +147,7 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		// Extract render key: new format embeds it in pubobs-url after last '&';
-		// fall back to legacy pubobs-render-key field for notes not yet re-synced.
-		var renderKey string
-		if pubobsURL, _ := meta.Frontmatter["pubobs-url"].(string); pubobsURL != "" {
-			if i := strings.LastIndex(pubobsURL, "&"); i != -1 {
-				renderKey = pubobsURL[i+1:]
-			}
-		}
-		if renderKey == "" {
-			renderKey, _ = meta.Frontmatter["pubobs-render-key"].(string)
-		}
+		hasRender := renderKeyFromFrontmatter(meta.Frontmatter) != ""
 
 		resp := map[string]any{
 			"id":             note.ID,
@@ -169,11 +160,8 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			"backlinks":      bl,
 		}
 
-		if renderKey != "" {
-			resp["render_url"] = "/pub/" + repoID + "/render/" + notePath
-			resp["render_key"] = renderKey
-		} else {
-			// Legacy fallback for notes not yet re-synced
+		if !hasRender {
+			// Legacy fallback: notes not yet synced with encryption
 			htmlContent, _ := deps.Cache.ReadRenderedHTML(repoID, notePath)
 			if htmlContent == "" {
 				htmlContent = snap.HTMLContent
@@ -226,9 +214,31 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
 		notePath := chi.URLParam(r, "*")
+		providedKey := r.URL.Query().Get("key")
 
-		if pubRepoAccess(r, deps, repoID) == nil {
-			writeError(w, http.StatusNotFound, "repo not found")
+		if providedKey == "" {
+			writeError(w, http.StatusForbidden, "key required")
+			return
+		}
+
+		note, err := deps.Store.GetNote(r.Context(), repoID, notePath)
+		if err != nil || note == nil {
+			writeError(w, http.StatusNotFound, "render not found")
+			return
+		}
+		snap, err := deps.Store.GetSnapshot(r.Context(), note.ID)
+		if err != nil || snap == nil {
+			writeError(w, http.StatusNotFound, "render not found")
+			return
+		}
+		var meta struct {
+			Frontmatter map[string]any `json:"frontmatter"`
+		}
+		_ = json.Unmarshal([]byte(snap.MetadataJSON), &meta)
+
+		expected := renderKeyFromFrontmatter(meta.Frontmatter)
+		if expected == "" || subtle.ConstantTimeCompare([]byte(providedKey), []byte(expected)) != 1 {
+			writeError(w, http.StatusForbidden, "invalid key")
 			return
 		}
 
@@ -246,6 +256,16 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		_, _ = w.Write(data)
 	}
+}
+
+func renderKeyFromFrontmatter(fm map[string]any) string {
+	if pubobsURL, _ := fm["pubobs-url"].(string); pubobsURL != "" {
+		if i := strings.LastIndex(pubobsURL, "&"); i != -1 {
+			return pubobsURL[i+1:]
+		}
+	}
+	key, _ := fm["pubobs-render-key"].(string)
+	return key
 }
 
 func handlePubGetAsset(deps *Deps) http.HandlerFunc {
