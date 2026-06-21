@@ -64,6 +64,20 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
     badge.textContent = tag;
     meta.appendChild(badge);
   }
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copy link';
+  copyBtn.className = 'r-btn-ghost';
+  copyBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px;margin-left:auto';
+  copyBtn.addEventListener('click', () => {
+    const url = `${location.origin}/#/read/${repoId}/${notePath}`;
+    navigator.clipboard.writeText(url).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
+    });
+  });
+  meta.appendChild(copyBtn);
+
   article.appendChild(meta);
 
   const content = document.createElement('div');

@@ -74,6 +74,11 @@ export function ensureReaderStyles(): void {
       border: none; border-radius: 6px; cursor: pointer; font-size: 0.875rem;
     }
     .r-btn-primary:hover { background: #4a5a7a; }
+    .r-btn-ghost {
+      background: transparent; border: 1px solid var(--r-border, #e2e8f0);
+      border-radius: 5px; cursor: pointer; color: var(--r-muted, #64748b);
+    }
+    .r-btn-ghost:hover { background: var(--r-border, #e2e8f0); }
     .r-error { color: var(--r-error); }
     .r-link { color: var(--r-link); }
   `;
