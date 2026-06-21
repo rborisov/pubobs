@@ -73,6 +73,28 @@ func TestHandleSync(t *testing.T) {
 	require.NotEmpty(t, resp["commit_sha"])
 }
 
+func TestHandleSync_emptyRepo(t *testing.T) {
+	bareURL := newBareRepo(t) // bare repo with NO initial commit
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Empty Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","html_content":"<h1>Hello</h1>","frontmatter":{}}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotEmpty(t, resp["commit_sha"])
+}
+
 func TestHandleSync_insufficientRole(t *testing.T) {
 	deps := newTestDepsWithCache(t)
 	ctx := context.Background()

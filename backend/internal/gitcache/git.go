@@ -96,6 +96,23 @@ func (g *GitRunner) FetchReset(dir, remoteURL, credJSON, branch string) error {
 	return err
 }
 
+// InitializeIfEmpty creates an initial empty commit and pushes it when the
+// local clone has no HEAD (i.e. the remote repo was empty at clone time).
+// It is a no-op when the repo already has commits.
+func (g *GitRunner) InitializeIfEmpty(dir, remoteURL, credJSON, branch string) error {
+	if _, err := g.run(dir, "rev-parse", "HEAD"); err == nil {
+		return nil
+	}
+	if _, err := g.run(dir, "commit", "--allow-empty", "-m", "pubobs: initialize"); err != nil {
+		return fmt.Errorf("initial commit: %w", err)
+	}
+	authedURL := credentialedURL(remoteURL, credJSON)
+	if _, err := g.run(dir, "push", authedURL, "HEAD:"+branch); err != nil {
+		return fmt.Errorf("initial push: %w", err)
+	}
+	return nil
+}
+
 // AddCommitPush stages all changes, commits, pushes, and returns the commit SHA.
 func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message string) (string, error) {
 	if _, err := g.run(dir, "add", "-A"); err != nil {

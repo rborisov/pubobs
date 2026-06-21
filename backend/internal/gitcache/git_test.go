@@ -101,3 +101,39 @@ func TestFetchReset(t *testing.T) {
 	require.Equal(t, strings.TrimSpace(string(remoteHead)), strings.TrimSpace(string(localHead)),
 		"local HEAD should match remote HEAD after FetchReset")
 }
+
+func TestInitializeIfEmpty_emptyRepo(t *testing.T) {
+	bareURL := newBareRepo(t)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	require.NoError(t, g.InitializeIfEmpty(cloneDir, bareURL, "", "main"))
+
+	sha, err := g.RevParseHEAD(cloneDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, sha)
+
+	out, err := exec.Command("git", "-C", bareURL, "rev-parse", "main").Output()
+	require.NoError(t, err)
+	require.NotEmpty(t, string(out))
+}
+
+func TestInitializeIfEmpty_nonEmptyRepo(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	shaBefore, err := g.RevParseHEAD(cloneDir)
+	require.NoError(t, err)
+
+	require.NoError(t, g.InitializeIfEmpty(cloneDir, bareURL, "", "main"))
+
+	shaAfter, err := g.RevParseHEAD(cloneDir)
+	require.NoError(t, err)
+	require.Equal(t, shaBefore, shaAfter)
+}
