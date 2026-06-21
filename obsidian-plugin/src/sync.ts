@@ -99,7 +99,9 @@ class IncompatibleNotesModal extends Modal {
 // ── Encryption helpers ────────────────────────────────────────────────────────
 
 function base64urlEncode(data: Uint8Array): string {
-  return btoa(String.fromCharCode(...data))
+  let binary = '';
+  for (let i = 0; i < data.byteLength; i++) binary += String.fromCharCode(data[i]);
+  return btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
