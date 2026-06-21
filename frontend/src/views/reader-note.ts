@@ -2,8 +2,13 @@ import { pubGetNote, pubListComments, addComment, type PubNoteDetail, type PubCo
 import { isAuthenticated } from '../auth';
 import { ensureReaderStyles } from '../reader-styles';
 
-export async function readerNoteView(repoId: string, notePath: string): Promise<HTMLElement> {
+export async function readerNoteView(repoId: string, rawNotePath: string): Promise<HTMLElement> {
   ensureReaderStyles();
+
+  // Key may be embedded after the last '&': /#/read/{repoId}/{notePath}&{key}
+  const ampIdx = rawNotePath.lastIndexOf('&');
+  const notePath = ampIdx !== -1 ? rawNotePath.slice(0, ampIdx) : rawNotePath;
+  const urlKey  = ampIdx !== -1 ? rawNotePath.slice(ampIdx + 1) : undefined;
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:720px;margin:0 auto;padding:40px 24px;font-family:system-ui,sans-serif';
@@ -70,7 +75,10 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
   copyBtn.className = 'r-btn-ghost';
   copyBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px;margin-left:auto';
   copyBtn.addEventListener('click', () => {
-    const url = `${location.origin}/#/read/${repoId}/${notePath}`;
+    const key = urlKey ?? note.render_key;
+    const url = key
+      ? `${location.origin}/#/read/${repoId}/${notePath}&${key}`
+      : `${location.origin}/#/read/${repoId}/${notePath}`;
     navigator.clipboard.writeText(url).then(() => {
       copyBtn.textContent = 'Copied!';
       setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
@@ -83,10 +91,11 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
   const content = document.createElement('div');
   content.className = 'markdown-rendered markdown-preview-view';
 
+  const decryptKey = urlKey ?? note.render_key;
   let htmlContent: string;
-  if (note.render_url && note.render_key) {
+  if (note.render_url && decryptKey) {
     try {
-      htmlContent = await decryptRenderBlob(note.render_url, note.render_key);
+      htmlContent = await decryptRenderBlob(note.render_url, decryptKey);
     } catch (e) {
       console.error('[PubObs] decryption failed, falling back:', e);
       htmlContent = note.html_content ?? '';

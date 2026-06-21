@@ -146,9 +146,17 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		// Check for encrypted render fields injected by the plugin
-		renderURL, _ := meta.Frontmatter["pubobs-render-url"].(string)
-		renderKey, _ := meta.Frontmatter["pubobs-render-key"].(string)
+		// Extract render key: new format embeds it in pubobs-url after last '&';
+		// fall back to legacy pubobs-render-key field for notes not yet re-synced.
+		var renderKey string
+		if pubobsURL, _ := meta.Frontmatter["pubobs-url"].(string); pubobsURL != "" {
+			if i := strings.LastIndex(pubobsURL, "&"); i != -1 {
+				renderKey = pubobsURL[i+1:]
+			}
+		}
+		if renderKey == "" {
+			renderKey, _ = meta.Frontmatter["pubobs-render-key"].(string)
+		}
 
 		resp := map[string]any{
 			"id":             note.ID,
@@ -161,8 +169,8 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			"backlinks":      bl,
 		}
 
-		if renderURL != "" && renderKey != "" {
-			resp["render_url"] = renderURL
+		if renderKey != "" {
+			resp["render_url"] = "/pub/" + repoID + "/render/" + notePath
 			resp["render_key"] = renderKey
 		} else {
 			// Legacy fallback for notes not yet re-synced

@@ -406,7 +406,14 @@ export class SyncManager {
       if (fmMatch) {
         try {
           const fm = parseYaml(fmMatch[1]) as Record<string, unknown>;
-          if (typeof fm['pubobs-render-key'] === 'string') {
+          // New format: key embedded in pubobs-url after last '&'
+          if (typeof fm['pubobs-url'] === 'string') {
+            const u = fm['pubobs-url'] as string;
+            const amp = u.lastIndexOf('&');
+            if (amp !== -1) renderKeyB64 = u.slice(amp + 1);
+          }
+          // Legacy: separate pubobs-render-key field
+          if (!renderKeyB64 && typeof fm['pubobs-render-key'] === 'string') {
             renderKeyB64 = fm['pubobs-render-key'];
           }
         } catch { /* ignore */ }
@@ -418,19 +425,11 @@ export class SyncManager {
     this.settings.renderKeys[repoId][repoPath] = renderKeyB64;
 
     const base = this.settings.backendUrl.replace(/\/$/, '');
-    const renderURL = `${base}/pub/${repoId}/render/${repoPath}`;
-    const readerURL = `${base}/#/read/${repoId}/${repoPath}`;
-    mdContent = injectFrontmatterFields(mdContent, {
-      'pubobs-url': readerURL,
-      'pubobs-render-url': renderURL,
-      'pubobs-render-key': renderKeyB64,
-    });
+    const pubobsURL = `${base}/#/read/${repoId}/${repoPath}&${renderKeyB64}`;
+    mdContent = injectFrontmatterFields(mdContent, { 'pubobs-url': pubobsURL });
 
-    // Also reflect the injected fields in the frontmatter payload so the backend
-    // can store them in MetadataJSON immediately (without waiting for git to commit)
-    frontmatter['pubobs-url'] = readerURL;
-    frontmatter['pubobs-render-url'] = renderURL;
-    frontmatter['pubobs-render-key'] = renderKeyB64;
+    // Also reflect in the frontmatter payload so the backend stores it immediately
+    frontmatter['pubobs-url'] = pubobsURL;
 
     const encryptedHTML = await encryptHTML(html, base64urlDecode(renderKeyB64));
 
