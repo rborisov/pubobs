@@ -25,6 +25,14 @@ type Config struct {
 	DiskWarnPct        float64
 	DiskCritPct        float64
 	DBPath             string
+	RenderStoreType string // "local" (default) or "s3"
+	RenderDir       string // base dir for local store
+	S3Endpoint      string
+	S3Bucket        string
+	S3AccessKey     string
+	S3SecretKey     string
+	S3Region        string
+	S3UseSSL        bool
 }
 
 func Load() (*Config, error) {
@@ -48,6 +56,19 @@ func Load() (*Config, error) {
 		RepoCacheDir:       getEnv("PUBOBS_REPO_CACHE_DIR", defaultCacheDir),
 		DBPath:             getEnv("PUBOBS_DB_PATH", defaultDBPath),
 	}
+
+	defaultRenderDir := filepath.Join(home, ".pubobs", "renders")
+	if _, err := os.Stat("/data"); err == nil {
+		defaultRenderDir = "/data/renders"
+	}
+	cfg.RenderStoreType = getEnv("PUBOBS_RENDER_STORE", "local")
+	cfg.RenderDir       = getEnv("PUBOBS_RENDER_DIR", defaultRenderDir)
+	cfg.S3Endpoint      = getEnv("PUBOBS_S3_ENDPOINT", "")
+	cfg.S3Bucket        = getEnv("PUBOBS_S3_BUCKET", "")
+	cfg.S3AccessKey     = getEnv("PUBOBS_S3_ACCESS_KEY", "")
+	cfg.S3SecretKey     = getEnv("PUBOBS_S3_SECRET_KEY", "")
+	cfg.S3Region        = getEnv("PUBOBS_S3_REGION", "")
+	cfg.S3UseSSL        = getEnv("PUBOBS_S3_USE_SSL", "true") != "false"
 
 	if raw := os.Getenv("PUBOBS_SECRET_KEY"); raw != "" {
 		key, err := hex.DecodeString(raw)
