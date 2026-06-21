@@ -267,7 +267,9 @@ export class SyncManager {
         const hash = fnv1a(content);
         newHashes[repoPath] = hash;
 
-        if (storedHashes[repoPath] === hash) {
+        // Skip only if hash matches AND the note already has the current pubobs-url format (with key)
+        const hasFreshUrl = /pubobs-url:.*\/#\/read\/.*&/.test(content);
+        if (hasFreshUrl && storedHashes[repoPath] === hash) {
           skipped++;
           continue;
         }
@@ -275,6 +277,17 @@ export class SyncManager {
         notice.setMessage(`Rendering ${syncFiles.length + 1}: ${f.basename}…`);
         const used = detectPlugins(content);
         const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId, used);
+
+        // Write pubobs-url back to vault so it's visible and copyable from the note
+        const pubobsURL = (syncFile.frontmatter as Record<string, unknown> | undefined)?.['pubobs-url'] as string | undefined;
+        if (pubobsURL) {
+          const updated = injectFrontmatterFields(content, { 'pubobs-url': pubobsURL });
+          if (updated !== content) {
+            await this.app.vault.modify(f, updated);
+            newHashes[repoPath] = fnv1a(updated);
+          }
+        }
+
         syncFiles.push(syncFile);
         for (const [vaultPath, buf] of assets) assetMap.set(vaultPath, buf);
       } catch (e) {
