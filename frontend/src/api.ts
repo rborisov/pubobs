@@ -155,11 +155,15 @@ export async function updateRepo(id: string, body: {
   name: string; remote_url: string; default_branch: string;
   username: string; password: string;
 }): Promise<void> {
-  await json(await authedFetch(`/api/admin/repos/${id}`, {
+  const resp = await authedFetch(`/api/admin/repos/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }));
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
+  }
 }
 
 export async function deleteRepo(id: string): Promise<void> {
