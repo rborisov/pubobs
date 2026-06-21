@@ -5,10 +5,11 @@ import { ensureReaderStyles } from '../reader-styles';
 export async function readerNoteView(repoId: string, rawNotePath: string): Promise<HTMLElement> {
   ensureReaderStyles();
 
-  // Key may be embedded after the last '&': /#/read/{repoId}/{notePath}&{key}
-  const ampIdx = rawNotePath.lastIndexOf('&');
-  const notePath = ampIdx !== -1 ? rawNotePath.slice(0, ampIdx) : rawNotePath;
-  const urlKey  = ampIdx !== -1 ? rawNotePath.slice(ampIdx + 1) : undefined;
+  // Decode %20 etc. that browsers add when pasting URLs, then split off the key
+  const decoded = decodeURIComponent(rawNotePath);
+  const ampIdx = decoded.lastIndexOf('&');
+  const notePath = ampIdx !== -1 ? decoded.slice(0, ampIdx) : decoded;
+  const urlKey  = ampIdx !== -1 ? decoded.slice(ampIdx + 1) : undefined;
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:720px;margin:0 auto;padding:40px 24px;font-family:system-ui,sans-serif';
