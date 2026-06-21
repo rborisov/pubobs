@@ -6,6 +6,7 @@ export interface PubObsSettings {
   repoMappings: Record<string, RepoMapping>; // repoId → mapping
   pullSHAs: Record<string, Record<string, string>>; // repoId → filePath → sha
   syncHashes: Record<string, Record<string, string>>; // repoId → repoPath → content hash
+  renderKeys: Record<string, Record<string, string>>; // repoId → repoPath → base64url-encoded AES-GCM key
 }
 
 export interface RepoMapping {
@@ -41,4 +42,5 @@ export const DEFAULT_SETTINGS: PubObsSettings = {
   repoMappings: {},
   pullSHAs: {},
   syncHashes: {},
+  renderKeys: {},
 };

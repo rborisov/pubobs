@@ -4,7 +4,7 @@ import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry } from './types
 export interface SyncFile {
   path: string;
   md_content: string;
-  html_content: string;
+  encrypted_html: string;
   frontmatter: Record<string, unknown>;
 }
 

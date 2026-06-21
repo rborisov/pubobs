@@ -96,6 +96,51 @@ class IncompatibleNotesModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+// ── Encryption helpers ────────────────────────────────────────────────────────
+
+function base64urlEncode(data: Uint8Array): string {
+  return btoa(String.fromCharCode(...data))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function base64urlDecode(s: string): Uint8Array {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function encryptHTML(html: string, keyBytes: Uint8Array): Promise<string> {
+  const rawKey = new Uint8Array(keyBytes).buffer as ArrayBuffer;
+  const cryptoKey = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(html));
+  const blob = new Uint8Array(12 + ciphertext.byteLength);
+  blob.set(iv, 0);
+  blob.set(new Uint8Array(ciphertext), 12);
+  return bufferToBase64(blob.buffer);
+}
+
+function injectFrontmatterFields(content: string, fields: Record<string, string>): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (fmMatch) {
+    let fm: Record<string, unknown>;
+    try { fm = (parseYaml(fmMatch[1]) as Record<string, unknown>) ?? {}; }
+    catch { fm = {}; }
+    for (const [k, v] of Object.entries(fields)) fm[k] = v;
+    const fmStr = stringifyYaml(fm);
+    return `---\n${fmStr}---\n${content.slice(fmMatch[0].length)}`;
+  }
+  const fm: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) fm[k] = v;
+  const fmStr = stringifyYaml(fm);
+  return `---\n${fmStr}---\n${content}`;
+}
+
 // ── SyncManager ───────────────────────────────────────────────────────────────
 
 export class SyncManager {
@@ -234,6 +279,13 @@ export class SyncManager {
     // Paths that were previously synced but no longer exist in the vault
     const deletedPaths = Object.keys(storedHashes).filter(p => !currentRepoPaths.has(p));
 
+    // Remove render keys for notes that no longer exist
+    if (this.settings.renderKeys[repoId]) {
+      for (const p of deletedPaths) {
+        delete this.settings.renderKeys[repoId][p];
+      }
+    }
+
     const syncAssets: SyncAsset[] = Array.from(assetMap.entries()).map(([vaultPath, buf]) => ({
       path: this.assetRepoPath(vaultPath, vaultFolder, subfolder),
       content: bufferToBase64(buf),
@@ -334,12 +386,45 @@ export class SyncManager {
       delete frontmatter['pubobs-plugins'];
     }
 
-    const mdContent = injectPluginFrontmatter(content, pluginsMeta);
+    let mdContent = injectPluginFrontmatter(content, pluginsMeta);
 
     const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder);
 
+    // ── Stable per-note encryption key ──────────────────────────────────────────
+    if (!this.settings.renderKeys[repoId]) this.settings.renderKeys[repoId] = {};
+    let renderKeyB64 = this.settings.renderKeys[repoId][repoPath];
+    if (!renderKeyB64) {
+      // Fallback: check existing frontmatter in case settings was migrated or lost
+      const fmMatch = mdContent.match(/^---\n([\s\S]*?)\n---/);
+      if (fmMatch) {
+        try {
+          const fm = parseYaml(fmMatch[1]) as Record<string, unknown>;
+          if (typeof fm['pubobs-render-key'] === 'string') {
+            renderKeyB64 = fm['pubobs-render-key'];
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    if (!renderKeyB64) {
+      renderKeyB64 = base64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
+    }
+    this.settings.renderKeys[repoId][repoPath] = renderKeyB64;
+
+    const renderURL = `${this.settings.backendUrl.replace(/\/$/, '')}/pub/${repoId}/render/${repoPath}`;
+    mdContent = injectFrontmatterFields(mdContent, {
+      'pubobs-render-url': renderURL,
+      'pubobs-render-key': renderKeyB64,
+    });
+
+    // Also reflect the injected fields in the frontmatter payload so the backend
+    // can store them in MetadataJSON immediately (without waiting for git to commit)
+    frontmatter['pubobs-render-url'] = renderURL;
+    frontmatter['pubobs-render-key'] = renderKeyB64;
+
+    const encryptedHTML = await encryptHTML(html, base64urlDecode(renderKeyB64));
+
     return {
-      syncFile: { path: repoPath, md_content: mdContent, html_content: html, frontmatter },
+      syncFile: { path: repoPath, md_content: mdContent, encrypted_html: encryptedHTML, frontmatter },
       assets,
     };
   }
