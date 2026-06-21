@@ -68,7 +68,19 @@ export async function readerNoteView(repoId: string, notePath: string): Promise<
 
   const content = document.createElement('div');
   content.className = 'markdown-rendered markdown-preview-view';
-  content.innerHTML = note.html_content;
+
+  let htmlContent: string;
+  if (note.render_url && note.render_key) {
+    try {
+      htmlContent = await decryptRenderBlob(note.render_url, note.render_key);
+    } catch (e) {
+      console.error('[PubObs] decryption failed, falling back:', e);
+      htmlContent = note.html_content ?? '';
+    }
+  } else {
+    htmlContent = note.html_content ?? '';
+  }
+  content.innerHTML = htmlContent;
   for (const cb of Array.from(content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox'))) {
     cb.style.setProperty('appearance', 'auto', 'important');
     cb.style.setProperty('-webkit-appearance', 'checkbox', 'important');
@@ -260,4 +272,25 @@ function renderCommentBody(text: string): string {
     .split(/\n\n+/)
     .map(p => `<p style="margin:0 0 6px">${p.replace(/\n/g, '<br>')}</p>`)
     .join('');
+}
+
+function base64urlDecode(s: string): Uint8Array {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function decryptRenderBlob(url: string, keyB64: string): Promise<string> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`render fetch failed: ${resp.status}`);
+  const encrypted = await resp.arrayBuffer();
+  const iv = encrypted.slice(0, 12);
+  const ciphertext = encrypted.slice(12);
+  const keyBytes = base64urlDecode(keyB64);
+  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes.buffer as ArrayBuffer, 'AES-GCM', false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, cryptoKey, ciphertext);
+  return new TextDecoder().decode(plaintext);
 }

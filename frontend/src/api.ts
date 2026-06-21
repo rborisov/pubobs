@@ -307,7 +307,9 @@ export interface PubNoteDetail {
   id: string;
   path: string;
   title: string;
-  html_content: string;
+  html_content?: string;
+  render_url?: string;
+  render_key?: string;
   tags: string[];
   frontmatter: Record<string, unknown>;
   git_commit_sha: string;
