@@ -417,14 +417,18 @@ export class SyncManager {
     }
     this.settings.renderKeys[repoId][repoPath] = renderKeyB64;
 
-    const renderURL = `${this.settings.backendUrl.replace(/\/$/, '')}/pub/${repoId}/render/${repoPath}`;
+    const base = this.settings.backendUrl.replace(/\/$/, '');
+    const renderURL = `${base}/pub/${repoId}/render/${repoPath}`;
+    const readerURL = `${base}/#/read/${repoId}/${repoPath}`;
     mdContent = injectFrontmatterFields(mdContent, {
+      'pubobs-url': readerURL,
       'pubobs-render-url': renderURL,
       'pubobs-render-key': renderKeyB64,
     });
 
     // Also reflect the injected fields in the frontmatter payload so the backend
     // can store them in MetadataJSON immediately (without waiting for git to commit)
+    frontmatter['pubobs-url'] = readerURL;
     frontmatter['pubobs-render-url'] = renderURL;
     frontmatter['pubobs-render-key'] = renderKeyB64;
 
