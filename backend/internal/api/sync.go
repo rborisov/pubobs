@@ -103,6 +103,9 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			if err != nil {
 				continue
 			}
+			if note == nil {
+				continue
+			}
 			meta := extractMetadata(f.MDContent, f.Frontmatter)
 			metaJSON, _ := json.Marshal(meta)
 			deps.Store.UpsertSnapshot(r.Context(), note.ID, "", string(metaJSON), claims.UserID, sha)
