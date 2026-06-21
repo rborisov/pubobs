@@ -44,9 +44,6 @@ func (s *S3RenderStore) Read(repoID, notePath string) ([]byte, error) {
 	key := repoID + "/" + notePath + ".enc"
 	obj, err := s.client.GetObject(context.Background(), s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return nil, nil
-		}
 		return nil, err
 	}
 	defer obj.Close()
