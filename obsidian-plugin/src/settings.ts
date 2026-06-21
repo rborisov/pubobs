@@ -1,6 +1,28 @@
-import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, PluginSettingTab, Setting, Notice, AbstractInputSuggest, TFolder } from 'obsidian';
 import type PubObsPlugin from './main';
 import type { RepoInfo } from './types';
+
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  constructor(app: App, inputEl: HTMLInputElement) {
+    super(app, inputEl);
+  }
+
+  getSuggestions(query: string): TFolder[] {
+    const lq = query.toLowerCase();
+    return this.app.vault.getAllLoadedFiles()
+      .filter((f): f is TFolder => f instanceof TFolder && f.path !== '/' && f.path.toLowerCase().includes(lq))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path);
+  }
+
+  selectSuggestion(folder: TFolder): void {
+    this.setValue(folder.path);
+    this.close();
+  }
+}
 
 export class PubObsSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: PubObsPlugin) {
@@ -44,21 +66,26 @@ export class PubObsSettingTab extends PluginSettingTab {
       containerEl.createEl('h3', { text: 'Repo mappings' });
 
       for (const [repoId, mapping] of Object.entries(this.plugin.settings.repoMappings)) {
+        const save = async (value: string) => {
+          this.plugin.settings.repoMappings[repoId].vaultFolder = value;
+          await this.plugin.saveSettings();
+          await this.plugin.client
+            .upsertFolderMapping(repoId, value, mapping.subfolder)
+            .catch(() => {});
+        };
+
         new Setting(containerEl)
           .setName(mapping.repoName)
           .setDesc(`Repo ID: ${repoId}`)
-          .addText(text =>
+          .addText(text => {
             text
-              .setPlaceholder('Vault folder (e.g. Notes/Published)')
+              .setPlaceholder('Select vault folder…')
               .setValue(mapping.vaultFolder)
-              .onChange(async v => {
-                this.plugin.settings.repoMappings[repoId].vaultFolder = v.trim();
-                await this.plugin.saveSettings();
-                await this.plugin.client
-                  .upsertFolderMapping(repoId, v.trim(), mapping.subfolder)
-                  .catch(() => {});
-              })
-          );
+              .onChange(async v => save(v.trim()));
+
+            const suggest = new FolderSuggest(this.app, text.inputEl);
+            suggest.onSelect(async (folder) => save(folder.path));
+          });
       }
     }
 

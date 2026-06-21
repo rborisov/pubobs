@@ -159,6 +159,11 @@ export class SyncManager {
 
     const { vaultFolder, subfolder } = mapping;
 
+    if (!vaultFolder) {
+      new Notice(`PubObs: set the vault folder for "${mapping.repoName}" in settings before syncing.`);
+      return;
+    }
+
     // ── Pull phase ──────────────────────────────────────────────────────────────
     const notice = new Notice('PubObs: checking for remote changes…', 0);
     try {
