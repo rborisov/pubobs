@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://lab.rclmx.ru/gogs/rborisov/pubobs.git"
+REPO_URL="https://github.com/rborisov/pubobs.git"
 INSTALL_DIR="/opt/pubobs"
 BACKEND_DIR="$INSTALL_DIR/backend"
 ENV_FILE="$BACKEND_DIR/.env"

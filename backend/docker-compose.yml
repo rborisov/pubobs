@@ -9,6 +9,7 @@ services:
     volumes:
       - ./data/db:/data/db
       - ./data/repos:/data/repos
+      - ./data/renders:/data/renders
     environment:
       PUBOBS_BASE_URL: ${PUBOBS_BASE_URL}
       PUBOBS_OIDC_ISSUER: ${PUBOBS_OIDC_ISSUER}
