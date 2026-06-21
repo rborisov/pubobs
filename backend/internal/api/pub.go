@@ -146,23 +146,35 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		htmlContent, _ := deps.Cache.ReadRenderedHTML(repoID, notePath)
-		if htmlContent == "" {
-			htmlContent = snap.HTMLContent // old notes synced before git rendering
-		}
-		htmlContent = rewriteRepoID(htmlContent, repoID)
+		// Check for encrypted render fields injected by the plugin
+		renderURL, _ := meta.Frontmatter["pubobs-render-url"].(string)
+		renderKey, _ := meta.Frontmatter["pubobs-render-key"].(string)
 
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"id":             note.ID,
 			"path":           note.Path,
 			"title":          noteTitle(notePath, snap),
-			"html_content":   htmlContent,
 			"tags":           meta.Tags,
 			"frontmatter":    meta.Frontmatter,
 			"git_commit_sha": snap.GitCommitSHA,
 			"synced_at":      snap.SyncedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			"backlinks":      bl,
-		})
+		}
+
+		if renderURL != "" && renderKey != "" {
+			resp["render_url"] = renderURL
+			resp["render_key"] = renderKey
+		} else {
+			// Legacy fallback for notes not yet re-synced
+			htmlContent, _ := deps.Cache.ReadRenderedHTML(repoID, notePath)
+			if htmlContent == "" {
+				htmlContent = snap.HTMLContent
+			}
+			htmlContent = rewriteRepoID(htmlContent, repoID)
+			resp["html_content"] = htmlContent
+		}
+
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -200,6 +212,32 @@ func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoI
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func handlePubGetRender(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "repoId")
+		notePath := chi.URLParam(r, "*")
+
+		if pubRepoAccess(r, deps, repoID) == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
+		data, err := deps.RenderStore.Read(repoID, notePath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "render read failed")
+			return
+		}
+		if data == nil {
+			writeError(w, http.StatusNotFound, "render not found")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		_, _ = w.Write(data)
+	}
 }
 
 func handlePubGetAsset(deps *Deps) http.HandlerFunc {

@@ -77,6 +77,7 @@ func BuildRouter(deps *Deps) http.Handler {
 	r.Get("/pub/{repoId}", handlePubListNotes(deps))
 	r.Get("/pub/{repoId}/notes/*", handlePubGetNote(deps))
 	r.Get("/pub/{repoId}/assets/*", handlePubGetAsset(deps))
+	r.Get("/pub/{repoId}/render/*", handlePubGetRender(deps))
 
 	r.Handle("/*", noCacheFS(http.FileServer(http.FS(frontend.FS()))))
 
