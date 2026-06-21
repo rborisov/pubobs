@@ -26,7 +26,7 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 	}
 
 	files := []gitcache.SyncFile{
-		{Path: "newdoc.md", MDContent: "# New", HTMLContent: "<h1>New</h1>"},
+		{Path: "newdoc.md", MDContent: "# New"},
 	}
 	sha, err := cache.Sync(context.Background(), repo, "", files, []gitcache.SyncAsset{}, "sync 2024-01-01 by alice")
 	require.NoError(t, err)

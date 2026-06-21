@@ -14,9 +14,8 @@ import (
 
 // SyncFile is one file in a sync payload from the plugin.
 type SyncFile struct {
-	Path        string
-	MDContent   string
-	HTMLContent string
+	Path      string
+	MDContent string
 }
 
 // SyncAsset is a binary file (image, etc.) referenced by synced notes.
@@ -97,12 +96,6 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 		}
 		if err := os.WriteFile(fullPath, []byte(f.MDContent), 0644); err != nil {
 			return "", fmt.Errorf("write %s: %w", f.Path, err)
-		}
-		if f.HTMLContent != "" {
-			htmlPath := strings.TrimSuffix(fullPath, ".md") + ".html"
-			if err := os.WriteFile(htmlPath, []byte(f.HTMLContent), 0644); err != nil {
-				return "", fmt.Errorf("write html %s: %w", f.Path, err)
-			}
 		}
 	}
 

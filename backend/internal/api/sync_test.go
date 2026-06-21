@@ -63,7 +63,7 @@ func TestHandleSync(t *testing.T) {
 	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
 	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
 
-	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","html_content":"<h1>Hello</h1>","frontmatter":{"tags":["test"]}}]}`
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{"tags":["test"]}}]}`
 	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
 	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
 	rr := httptest.NewRecorder()
@@ -85,7 +85,7 @@ func TestHandleSync_emptyRepo(t *testing.T) {
 	deps.Store.CreateRepo(ctx, "r1", "Empty Repo", bareURL, "", "main")
 	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
 
-	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","html_content":"<h1>Hello</h1>","frontmatter":{}}]}`
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{}}]}`
 	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
 	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
 	rr := httptest.NewRecorder()

@@ -21,10 +21,10 @@ type syncAssetPayload struct {
 }
 
 type syncFilePayload struct {
-	Path        string         `json:"path"`
-	MDContent   string         `json:"md_content"`
-	HTMLContent string         `json:"html_content"`
-	Frontmatter map[string]any `json:"frontmatter"`
+	Path          string         `json:"path"`
+	MDContent     string         `json:"md_content"`
+	EncryptedHTML string         `json:"encrypted_html"`
+	Frontmatter   map[string]any `json:"frontmatter"`
 }
 
 func handleSync(deps *Deps) http.HandlerFunc {
@@ -71,9 +71,8 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		cacheFiles := make([]gitcache.SyncFile, len(payload.Files))
 		for i, f := range payload.Files {
 			cacheFiles[i] = gitcache.SyncFile{
-				Path:        f.Path,
-				MDContent:   f.MDContent,
-				HTMLContent: f.HTMLContent,
+				Path:      f.Path,
+				MDContent: f.MDContent,
 			}
 		}
 
@@ -108,9 +107,17 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			metaJSON, _ := json.Marshal(meta)
 			deps.Store.UpsertSnapshot(r.Context(), note.ID, "", string(metaJSON), claims.UserID, sha)
 			deps.Store.UpsertNoteLinks(r.Context(), note.ID, meta.Links)
+			if encBytes, err := base64.StdEncoding.DecodeString(f.EncryptedHTML); err == nil && len(encBytes) > 0 {
+				if werr := deps.RenderStore.Write(repoID, f.Path, encBytes); werr != nil {
+					fmt.Printf("renderstore write %s/%s: %v\n", repoID, f.Path, werr)
+				}
+			}
 		}
 		for _, p := range payload.DeletedPaths {
 			deps.Store.DeleteNote(r.Context(), repoID, p)
+			if derr := deps.RenderStore.Delete(repoID, p); derr != nil {
+				fmt.Printf("renderstore delete %s/%s: %v\n", repoID, p, derr)
+			}
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)
 
