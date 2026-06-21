@@ -408,7 +408,7 @@ export class SyncManager {
 
     let mdContent = injectPluginFrontmatter(content, pluginsMeta);
 
-    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder);
+    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder, this.settings.renderKeys[repoId]);
 
     // ── Stable per-note encryption key ──────────────────────────────────────────
     if (!this.settings.renderKeys[repoId]) this.settings.renderKeys[repoId] = {};

@@ -24,6 +24,7 @@ export async function renderNoteToHTML(
   repoId: string,
   vaultFolder: string,
   subfolder: string,
+  renderKeys?: Record<string, string>,
 ): Promise<RenderedNote> {
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:800px;visibility:hidden';
@@ -48,7 +49,7 @@ export async function renderNoteToHTML(
     }
 
     // Rewrite internal links in the DOM (safe — only changes href, no resource loading)
-    rewriteInternalLinks(app, container, sourcePath, repoId, vaultFolder, subfolder);
+    rewriteInternalLinks(app, container, sourcePath, repoId, vaultFolder, subfolder, renderKeys);
 
     // Forward Obsidian's image sizing to the <img> as inline styles.
     // ![[image.jpg|400]] sets width="400" on span.internal-embed; without this the
@@ -159,6 +160,7 @@ function rewriteInternalLinks(
   repoId: string,
   vaultFolder: string,
   subfolder: string,
+  renderKeys?: Record<string, string>,
 ): void {
   for (const a of Array.from(container.querySelectorAll<HTMLAnchorElement>('a.internal-link'))) {
     const dataHref = a.getAttribute('data-href') ?? '';
@@ -173,7 +175,8 @@ function rewriteInternalLinks(
     if (subfolder) {
       repoPath = `${subfolder.replace(/\/$/, '')}/${repoPath}`;
     }
-    a.href = `#/read/${repoId}/${repoPath}`;
+    const key = renderKeys?.[repoPath];
+    a.href = key ? `#/read/${repoId}/${repoPath}&${key}` : `#/read/${repoId}/${repoPath}`;
     a.removeAttribute('data-href');
     a.classList.remove('internal-link');
   }
