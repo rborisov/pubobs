@@ -13,6 +13,7 @@ import (
 
 	"github.com/pubobs/backend/internal/api"
 	"github.com/pubobs/backend/internal/gitcache"
+	"github.com/pubobs/backend/internal/renderstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,7 @@ func newTestDepsWithCache(t *testing.T) *api.Deps {
 	t.Helper()
 	deps := newTestDeps(t)
 	deps.Cache = gitcache.NewCache(t.TempDir())
+	deps.RenderStore = renderstore.NewLocal(t.TempDir())
 	return deps
 }
 

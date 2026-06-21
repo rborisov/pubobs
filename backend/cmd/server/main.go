@@ -16,6 +16,7 @@ import (
 	"github.com/pubobs/backend/internal/db"
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/jobs"
+	"github.com/pubobs/backend/internal/renderstore"
 	"github.com/pubobs/backend/internal/store"
 )
 
@@ -53,12 +54,27 @@ func main() {
 		providers = append(providers, &auth.NamedProvider{ID: "yandex", Name: "Sign in with Yandex", Client: yandex})
 	}
 
+	rs, err := renderstore.New(
+		cfg.RenderStoreType,
+		cfg.RenderDir,
+		cfg.S3Endpoint,
+		cfg.S3Bucket,
+		cfg.S3AccessKey,
+		cfg.S3SecretKey,
+		cfg.S3Region,
+		cfg.S3UseSSL,
+	)
+	if err != nil {
+		log.Fatalf("render store: %v", err)
+	}
+
 	deps := &api.Deps{
 		Store:         store.New(database),
 		Cache:         gitcache.NewCache(cfg.RepoCacheDir),
 		Auth:          auth.NewSessionStore(),
 		OIDCProviders: providers,
 		Config:        cfg,
+		RenderStore:   rs,
 	}
 
 	jobs.StartEvictionJob(ctx, deps.Store, deps.Cache, cfg)
