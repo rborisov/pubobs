@@ -39,6 +39,15 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     return wrap;
   }
 
+  // If no key was in the URL, fall back to the key embedded in the note's pubobs-url frontmatter.
+  // This lets authenticated users view notes when navigating directly rather than via share link.
+  let effectiveKey = urlKey;
+  if (!effectiveKey) {
+    const pubobsUrl = (note.frontmatter?.['pubobs-url'] as string | undefined) ?? '';
+    const i = pubobsUrl.lastIndexOf('&');
+    if (i !== -1) effectiveKey = pubobsUrl.slice(i + 1);
+  }
+
   const back = document.createElement('a');
   back.href = `#/read/${repoId}`;
   back.className = 'r-muted';
@@ -76,8 +85,8 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   copyBtn.className = 'r-btn-ghost';
   copyBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px;margin-left:auto';
   copyBtn.addEventListener('click', () => {
-    const url = urlKey
-      ? `${location.origin}/#/read/${repoId}/${notePath}&${urlKey}`
+    const url = effectiveKey
+      ? `${location.origin}/#/read/${repoId}/${notePath}&${effectiveKey}`
       : `${location.origin}/#/read/${repoId}/${notePath}`;
     navigator.clipboard.writeText(url).then(() => {
       copyBtn.textContent = 'Copied!';
@@ -92,10 +101,10 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   content.className = 'markdown-rendered markdown-preview-view';
 
   let htmlContent: string;
-  if (urlKey) {
+  if (effectiveKey) {
     try {
-      const renderURL = `/pub/${repoId}/render/${encodeURIComponent(notePath)}?key=${urlKey}`;
-      htmlContent = await decryptRenderBlob(renderURL, urlKey);
+      const renderURL = `/pub/${repoId}/render/${encodeURIComponent(notePath)}?key=${effectiveKey}`;
+      htmlContent = await decryptRenderBlob(renderURL, effectiveKey);
     } catch (e) {
       console.error('[PubObs] decryption failed:', e);
       htmlContent = '<p style="color:#888;font-style:italic">Could not decrypt note content.</p>';
