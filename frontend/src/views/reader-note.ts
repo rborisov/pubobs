@@ -39,13 +39,18 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     return wrap;
   }
 
-  // If no key was in the URL, fall back to the key embedded in the note's pubobs-url frontmatter.
+  // If no key was in the URL, fall back to the key embedded in the note's frontmatter.
   // This lets authenticated users view notes when navigating directly rather than via share link.
   let effectiveKey = urlKey;
   if (!effectiveKey) {
     const pubobsUrl = (note.frontmatter?.['pubobs-url'] as string | undefined) ?? '';
     const i = pubobsUrl.lastIndexOf('&');
-    if (i !== -1) effectiveKey = pubobsUrl.slice(i + 1);
+    if (i !== -1) {
+      effectiveKey = pubobsUrl.slice(i + 1);
+    } else {
+      // Legacy format: key stored as a separate frontmatter field
+      effectiveKey = (note.frontmatter?.['pubobs-render-key'] as string | undefined);
+    }
   }
 
   const back = document.createElement('a');
