@@ -176,6 +176,20 @@ export class SyncManager {
 
       for (const file of noteFiles) {
         if (storedPullSHAs[file.path] === file.sha) continue;
+
+        // Don't overwrite local unsynchronised changes with the server version.
+        // If the local file hash differs from what was last pushed, the user has
+        // made edits since the last sync — skip the pull to preserve them.
+        const vaultPathForCheck = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+        const existingForCheck = this.app.vault.getAbstractFileByPath(vaultPathForCheck);
+        if (existingForCheck instanceof TFile) {
+          const localContent = await this.app.vault.read(existingForCheck);
+          const lastSyncedHash = (this.settings.syncHashes[repoId] ?? {})[file.path];
+          if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
+            continue;
+          }
+        }
+
         const required = parseFrontmatterPlugins(file.content)
           .filter(p => PLUGIN_PATTERNS.some(pp => pp.id === p.id));
         if (required.length > 0) {
