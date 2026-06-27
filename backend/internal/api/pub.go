@@ -253,7 +253,7 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	}
 }
