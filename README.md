@@ -179,6 +179,64 @@ Download `main.js` and `manifest.json` from the [latest release](https://github.
 
 ---
 
+## Development
+
+This section is for building and deploying PubObs from source. If you just want to run PubObs, use the [Quick Install](#quick-install-vps) instructions above instead.
+
+### Server (backend + frontend)
+
+Prerequisites: Go 1.25+, Node 20+.
+
+The backend serves a bundled frontend (`backend/frontend/static/`) via `go:embed`, and its Docker image doesn't compile Go — `backend/Dockerfile` just copies a prebuilt binary from `backend/bin/`. That means **the binaries in `backend/bin/` are committed to git** and must be rebuilt and committed as part of any change that touches the frontend or backend source.
+
+1. Build the frontend (regenerates `backend/frontend/static/app.js`, embedded into the binary at compile time):
+
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   ```
+
+2. Build the Linux binaries the Docker image copies in:
+
+   ```bash
+   cd backend
+   make build          # builds bin/pubobs-linux-amd64 and bin/pubobs-linux-arm64
+   ```
+
+3. Commit the source changes *together with* the rebuilt `backend/frontend/static/app.js`, `backend/bin/pubobs-linux-amd64`, and `backend/bin/pubobs-linux-arm64`, then push to `main`.
+
+4. Deploy by running the updater on the VPS — it pulls `main`, copies the new binary, rebuilds the Docker image, and restarts the container:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/rborisov/pubobs/main/install.sh -o /tmp/pubobs-install.sh
+   sudo bash /tmp/pubobs-install.sh --update
+   ```
+
+For local iteration without a full deploy, `cd frontend && npm run dev` runs an unminified esbuild watch build, and `cd backend && go run ./cmd/server` runs the server directly (needs the same env vars as [Environment variables](#environment-variables)).
+
+### Obsidian plugin release
+
+Prerequisites: Node 20+.
+
+```bash
+cd obsidian-plugin
+npm install
+npm run dev      # watch mode, for local testing in a vault
+npm run build    # typecheck + production build -> main.js
+```
+
+Releases are automated by [`.github/workflows/release-plugin.yml`](.github/workflows/release-plugin.yml): pushing a tag matching `[0-9]+.[0-9]+.[0-9]+` (e.g. `0.3.0`) builds the plugin and publishes a GitHub release with `main.js` and `manifest.json` attached, which is what BRAT and manual installs pull from.
+
+To cut a release:
+
+1. Bump `"version"` in **both** `obsidian-plugin/package.json` and `obsidian-plugin/manifest.json` to the new version, commit, push to `main`.
+2. Tag and push the tag: `git tag 0.3.0 && git push origin 0.3.0`.
+
+> **Note:** past releases (e.g. `0.2.1`–`0.2.5`) were tagged without bumping `manifest.json`'s `version` field, which still reads `0.2.0` at those tags — keep the two in sync going forward so the version Obsidian displays matches the actual release.
+
+---
+
 ## Troubleshooting
 
 **Container won't start:**
