@@ -12,7 +12,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const urlKey  = ampIdx !== -1 ? decoded.slice(ampIdx + 1) : undefined;
 
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'max-width:720px;margin:0 auto;padding:40px 24px;font-family:system-ui,sans-serif';
+  wrap.style.cssText = 'padding:40px 24px;font-family:system-ui,sans-serif';
 
   // Inject Obsidian's theme CSS once per page load, with targeted patches for rules
   // that break normal browser layout (overflow:hidden on body, fixed heights, etc.)
