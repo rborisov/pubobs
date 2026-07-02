@@ -81,6 +81,20 @@ export function ensureReaderStyles(): void {
     .r-btn-ghost:hover { background: var(--r-border, #e2e8f0); }
     .r-error { color: var(--r-error); }
     .r-link { color: var(--r-link); }
+    .markdown-rendered table {
+      border-collapse: collapse !important; width: 100%; margin: 1.5em 0;
+      font-size: 0.9em;
+    }
+    .markdown-rendered th, .markdown-rendered td {
+      border: 1px solid var(--r-border) !important; padding: 6px 12px !important;
+      text-align: left;
+    }
+    .markdown-rendered thead th {
+      background: var(--r-card-bg) !important; font-weight: 600;
+    }
+    .markdown-rendered tbody tr:nth-child(even) td {
+      background: var(--r-hover-bg) !important;
+    }
   `;
   document.head.appendChild(style);
 }

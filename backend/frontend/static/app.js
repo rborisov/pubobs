@@ -161,6 +161,20 @@ This removes the repo from PubObs (the remote git repo is not affected).`))try{a
     .r-btn-ghost:hover { background: var(--r-border, #e2e8f0); }
     .r-error { color: var(--r-error); }
     .r-link { color: var(--r-link); }
+    .markdown-rendered table {
+      border-collapse: collapse !important; width: 100%; margin: 1.5em 0;
+      font-size: 0.9em;
+    }
+    .markdown-rendered th, .markdown-rendered td {
+      border: 1px solid var(--r-border) !important; padding: 6px 12px !important;
+      text-align: left;
+    }
+    .markdown-rendered thead th {
+      background: var(--r-card-bg) !important; font-weight: 600;
+    }
+    .markdown-rendered tbody tr:nth-child(even) td {
+      background: var(--r-hover-bg) !important;
+    }
   `,document.head.appendChild(e)}function re(e){let t=e.lastIndexOf("/");return t===-1?"":e.slice(0,t)}function xt(e){let t={name:"",fullPath:"",children:[],count:e.length},n=new Map;n.set("",t);function r(s){if(n.has(s))return n.get(s);let o=re(s),i=r(o),l={name:s.slice(o?o.length+1:0),fullPath:s,children:[],count:0};return i.children.push(l),n.set(s,l),l}for(let s of e){let o=re(s.path);if(o){let i=o.split("/");for(let a=1;a<=i.length;a++){let l=i.slice(0,a).join("/");r(l).count++}}}return t}function ht(e){var n;let t=new Set;for(let r of e)for(let s of(n=r.tags)!=null?n:[])t.add(s);return[...t].sort()}function yt(e,t){let n=t.query.toLowerCase();return e.filter(r=>{var s;return!(t.folder&&r.path!==t.folder&&!r.path.startsWith(t.folder+"/")||t.tag&&!((s=r.tags)!=null?s:[]).includes(t.tag)||n&&!r.title.toLowerCase().includes(n)&&!r.path.toLowerCase().includes(n))})}function Ze(e,t,n,r=0){let s=document.createElement("div");if(r===0){let o=document.createElement("div");o.style.cssText=`
       padding:5px 8px 5px ${8+r*16}px;
       border-radius:4px;cursor:pointer;font-size:0.85rem;
