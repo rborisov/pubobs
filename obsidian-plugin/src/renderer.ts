@@ -27,7 +27,13 @@ export async function renderNoteToHTML(
   renderKeys?: Record<string, string>,
 ): Promise<RenderedNote> {
   const container = document.createElement('div');
-  container.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:800px;visibility:hidden';
+  // Deliberately NOT positioned far off-viewport (e.g. left:-9999px): Chromium
+  // deprioritizes/alters layout computation for content thousands of pixels
+  // outside the viewport, which broke widgets doing real DOM/JS layout (like
+  // vis-timeline) even though they were invisible either way. opacity:0 +
+  // pointer-events:none keeps this fully invisible/non-interactive while
+  // staying within normal viewport proximity so layout stays accurate.
+  container.style.cssText = 'position:fixed;top:0;left:0;width:800px;opacity:0;pointer-events:none;z-index:-1';
   // Plugins whose code-block processors need to render differently for pubobs's
   // static-HTML capture (e.g. rasterizing a live widget to an <img> instead of
   // building an interactive DOM) can check el.closest('[data-pubobs-render]').
