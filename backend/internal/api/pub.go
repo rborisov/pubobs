@@ -289,7 +289,7 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 			ct = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	}
 }
