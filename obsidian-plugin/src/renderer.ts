@@ -28,6 +28,10 @@ export async function renderNoteToHTML(
 ): Promise<RenderedNote> {
   const container = document.createElement('div');
   container.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:800px;visibility:hidden';
+  // Plugins whose code-block processors need to render differently for pubobs's
+  // static-HTML capture (e.g. rasterizing a live widget to an <img> instead of
+  // building an interactive DOM) can check el.closest('[data-pubobs-render]').
+  container.setAttribute('data-pubobs-render', '1');
   document.body.appendChild(container);
 
   const component = new Component();
