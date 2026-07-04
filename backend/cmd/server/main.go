@@ -83,8 +83,8 @@ func main() {
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 120 * time.Second,
+		ReadTimeout:  300 * time.Second,
+		WriteTimeout: 300 * time.Second,
 	}
 
 	go func() {
