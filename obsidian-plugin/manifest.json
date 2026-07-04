@@ -1,7 +1,7 @@
 {
   "id": "pubobs",
   "name": "PubObs",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "minAppVersion": "1.4.0",
   "description": "Collaborative publishing via Git",
   "author": "PubObs",
