@@ -1,6 +1,7 @@
 package api
 
 import (
+	"compress/gzip"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -16,10 +17,29 @@ func noCacheFS(next http.Handler) http.Handler {
 	})
 }
 
+// decompressRequestBody transparently gunzips request bodies sent with
+// Content-Encoding: gzip (e.g. the Obsidian plugin's sync payload, which can
+// run tens of MB uncompressed) before they reach any handler.
+func decompressRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(r.Body)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid gzip body")
+				return
+			}
+			defer gz.Close()
+			r.Body = gz
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func BuildRouter(deps *Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(decompressRequestBody)
 
 	// Auth (unauthenticated)
 	r.Get("/auth/providers", handleListProviders(deps))

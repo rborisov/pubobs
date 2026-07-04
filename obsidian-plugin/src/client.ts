@@ -1,6 +1,13 @@
 import { requestUrl, RequestUrlParam } from 'obsidian';
 import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry } from './types';
 
+// Sync payloads (vault CSS + rendered notes/assets) can run tens of MB
+// uncompressed; gzip shrinks JSON/base64 text by roughly 60-80%.
+async function gzipCompress(text: string): Promise<ArrayBuffer> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Response(stream).arrayBuffer();
+}
+
 export interface SyncFile {
   path: string;
   md_content: string;
@@ -110,11 +117,13 @@ export class BackendClient {
   }
 
   async sync(repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[]): Promise<{ commit_sha: string }> {
+    const body = await gzipCompress(JSON.stringify({ files, assets, deleted_paths: deletedPaths }));
     return this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/sync`,
       method: 'POST',
       contentType: 'application/json',
-      body: JSON.stringify({ files, assets, deleted_paths: deletedPaths }),
+      headers: { 'Content-Encoding': 'gzip' },
+      body,
     });
   }
 
