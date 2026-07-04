@@ -59,11 +59,25 @@ export class BackendClient {
       },
       throw: false,
     });
+    let body: unknown;
+    try {
+      body = resp.json;
+    } catch {
+      // Non-JSON body — e.g. an nginx error page for an oversized request or a
+      // gateway timeout. Surface something actionable instead of the raw
+      // "Unexpected token '<'... is not valid JSON" parse error.
+      throw new Error(
+        `Server returned a non-JSON response (HTTP ${resp.status}). ` +
+        'This usually means the request was rejected before reaching PubObs ' +
+        '(e.g. payload too large, or a proxy/gateway error).'
+      );
+    }
+
     if (resp.status >= 400) {
-      const msg = (resp.json as { error?: string })?.error ?? `HTTP ${resp.status}`;
+      const msg = (body as { error?: string })?.error ?? `HTTP ${resp.status}`;
       throw new Error(msg);
     }
-    return resp.json as T;
+    return body as T;
   }
 
   async getMe(): Promise<{ id: string; email: string; is_instance_admin: boolean }> {
