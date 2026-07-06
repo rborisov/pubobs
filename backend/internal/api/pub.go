@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -278,10 +279,23 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data, err := deps.Cache.ReadAsset(repoID, assetPath)
+		data, err := deps.AssetStore.Read(repoID, assetPath)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "asset not found")
+			writeError(w, http.StatusInternalServerError, "asset read failed")
 			return
+		}
+		if data == nil {
+			// Not in the asset store yet — likely synced before this feature
+			// shipped. Fall back to the git checkout and backfill so the next
+			// request hits the fast path.
+			data, err = deps.Cache.ReadAsset(repoID, assetPath)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "asset not found")
+				return
+			}
+			if werr := deps.AssetStore.Write(repoID, assetPath, data); werr != nil {
+				fmt.Printf("assetstore backfill %s/%s: %v\n", repoID, assetPath, werr)
+			}
 		}
 
 		ct := mime.TypeByExtension(filepath.Ext(assetPath))
