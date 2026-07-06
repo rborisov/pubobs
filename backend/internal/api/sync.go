@@ -116,6 +116,13 @@ func handleSync(deps *Deps) http.HandlerFunc {
 				}
 			}
 		}
+
+		for _, a := range cacheAssets {
+			if werr := deps.AssetStore.Write(repoID, a.Path, a.Content); werr != nil {
+				fmt.Printf("assetstore write %s/%s: %v\n", repoID, a.Path, werr)
+			}
+		}
+
 		for _, p := range payload.DeletedPaths {
 			deps.Store.DeleteNote(r.Context(), repoID, p)
 			if derr := deps.RenderStore.Delete(repoID, p); derr != nil {

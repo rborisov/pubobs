@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -110,4 +111,30 @@ func TestHandleSync_insufficientRole(t *testing.T) {
 	rr := httptest.NewRecorder()
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusForbidden, rr.Code)
+}
+
+func TestHandleSync_writesAssetsToAssetStore(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	deps.AssetStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{}}],` +
+		`"assets":[{"path":"img.png","content":"` + base64.StdEncoding.EncodeToString([]byte("pngbytes")) + `"}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	data, err := deps.AssetStore.Read("r1", "img.png")
+	require.NoError(t, err)
+	require.Equal(t, []byte("pngbytes"), data)
 }
