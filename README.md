@@ -118,11 +118,12 @@ PUBOBS_ADMIN_EMAIL=admin@example.com         # grants admin on first login
 PUBOBS_YANDEX_CLIENT_ID=
 PUBOBS_YANDEX_CLIENT_SECRET=
 
-# Render storage (default: local disk)
+# Render storage (bootstrap default only — see Storage section below)
 PUBOBS_RENDER_STORE=local                    # or "s3"
 PUBOBS_RENDER_DIR=/data/renders              # used when RENDER_STORE=local
+PUBOBS_ASSET_DIR=/data/assets                # used when RENDER_STORE=local
 
-# S3-compatible render storage (required when RENDER_STORE=s3)
+# S3-compatible render storage (bootstrap default only, required when RENDER_STORE=s3)
 PUBOBS_S3_ENDPOINT=s3.amazonaws.com
 PUBOBS_S3_BUCKET=my-pubobs-renders
 PUBOBS_S3_ACCESS_KEY=...
@@ -144,6 +145,23 @@ After editing `.env`, restart the container:
 cd /opt/pubobs/backend
 docker compose restart
 ```
+
+---
+
+## Storage
+
+Render blobs and media assets can live on local disk or on S3-compatible
+object storage. The `PUBOBS_RENDER_STORE` / `PUBOBS_S3_*` / `PUBOBS_ASSET_DIR`
+environment variables above are **bootstrap-only**: they seed the
+`storage_settings` table the first time the server starts with an empty
+table, and are ignored on every subsequent boot.
+
+After first boot, use the **Storage** page in the admin panel (instance
+admin nav) to view usage and change the backend or S3 credentials. Changes
+made there apply live — no container restart needed. A "Migrate existing
+local data to S3" button is available once S3 is configured, to move
+previously-local renders/assets over; it runs as a background job and the
+page reflects progress and updated usage on the next load.
 
 ---
 
