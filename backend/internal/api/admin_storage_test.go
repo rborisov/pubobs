@@ -143,10 +143,17 @@ func TestAdminStorageSettings_putAppliesLive(t *testing.T) {
 	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
 	deps.Store.UpsertStorageSettings(ctx, &model.StorageSettings{StoreType: "local", MigrationStatus: "idle", AssetEncryptionKey: strings.Repeat("00", 32)})
 
+	// The PUT handler rebuilds the local render/asset stores from
+	// deps.Config.RenderDir/AssetDir. Point those at throwaway temp dirs so
+	// the swapped-in store lands there instead of defaulting to the current
+	// working directory (which, during `go test`, is this package's source
+	// directory on disk).
+	deps.Config.RenderDir = t.TempDir()
+	deps.Config.AssetDir = t.TempDir()
+
 	// Switching to a different local directory (standing in for "a different
 	// backend") should take effect immediately, no restart: write via the
 	// swapped-in store and read it straight back through deps.RenderStore.
-	newDir := t.TempDir()
 	body := `{"store_type":"local"}`
 	req := httptest.NewRequest("PUT", "/api/admin/storage-settings", strings.NewReader(body))
 	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
@@ -154,7 +161,6 @@ func TestAdminStorageSettings_putAppliesLive(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
-	_ = newDir // the handler derives its own dirs from deps.Config; see Step 3
 	require.NoError(t, deps.RenderStore.Write("r1", "note.md", []byte("after-swap")))
 	got, err := deps.RenderStore.Read("r1", "note.md")
 	require.NoError(t, err)
