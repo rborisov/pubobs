@@ -358,3 +358,62 @@ export async function addComment(repoId: string, notePath: string, body: string,
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
+
+export interface StorageSettings {
+  store_type: 'local' | 's3';
+  s3_endpoint: string;
+  s3_bucket: string;
+  s3_access_key: string;
+  s3_region: string;
+  s3_use_ssl: boolean;
+  migration_status: 'idle' | 'running' | 'done' | 'failed';
+  migration_total: number;
+  migration_done: number;
+}
+
+export interface StorageSettingsUpdate {
+  store_type: 'local' | 's3';
+  s3_endpoint: string;
+  s3_bucket: string;
+  s3_access_key: string;
+  s3_secret_key: string;
+  s3_region: string;
+  s3_use_ssl: boolean;
+}
+
+export interface StorageUsage {
+  local_free_bytes: number;
+  local_repos_bytes: number;
+  local_renders_bytes: number;
+  local_assets_bytes: number;
+  s3_renders_bytes: number;
+  s3_assets_bytes: number;
+}
+
+export async function getStorageSettings(): Promise<StorageSettings> {
+  return json<StorageSettings>(await authedFetch('/api/admin/storage-settings'));
+}
+
+export async function updateStorageSettings(patch: StorageSettingsUpdate): Promise<void> {
+  const resp = await authedFetch('/api/admin/storage-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
+  }
+}
+
+export async function getStorageUsage(): Promise<StorageUsage> {
+  return json<StorageUsage>(await authedFetch('/api/admin/storage-usage'));
+}
+
+export async function triggerStorageMigration(): Promise<void> {
+  const resp = await authedFetch('/api/admin/storage-migrate', { method: 'POST' });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
+  }
+}
