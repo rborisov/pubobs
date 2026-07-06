@@ -53,6 +53,42 @@ func (s *LocalRenderStore) Delete(repoID, notePath string) error {
 	return err
 }
 
+// WalkEntries calls fn for every (repoID, notePath) currently stored,
+// derived from the on-disk <baseDir>/<repoID>/<notePath>.enc layout. Used by
+// the migration job to enumerate existing local data without needing a
+// separate index of what's been synced.
+func (s *LocalRenderStore) WalkEntries(fn func(repoID, notePath string) error) error {
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, repoEntry := range entries {
+		if !repoEntry.IsDir() {
+			continue
+		}
+		repoID := repoEntry.Name()
+		repoDir := filepath.Join(s.baseDir, repoID)
+		err := filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(repoDir, path)
+			if err != nil {
+				return nil
+			}
+			notePath := strings.TrimSuffix(rel, ".enc")
+			return fn(repoID, notePath)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *LocalRenderStore) filePath(repoID, notePath string) (string, error) {
 	p := filepath.Join(s.baseDir, repoID, notePath+".enc")
 	// Ensure the resolved path stays within baseDir
