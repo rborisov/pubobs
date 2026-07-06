@@ -1,8 +1,9 @@
 // backend/internal/renderstore/store.go
 package renderstore
 
-// RenderStore persists encrypted rendered HTML blobs keyed by repo + note path.
-// Blobs are opaque bytes; no decryption happens server-side.
+// RenderStore persists blobs keyed by repo + path. Render-blob values are
+// opaque pre-encrypted bytes (client-side AES-GCM, server never decrypts);
+// asset values are plaintext until wrapped in an EncryptingStore.
 type RenderStore interface {
 	Write(repoID, notePath string, data []byte) error
 	Read(repoID, notePath string) ([]byte, error)
@@ -10,13 +11,16 @@ type RenderStore interface {
 }
 
 // New constructs a RenderStore based on storeType ("local" or "s3").
-// For "local", renderDir is the base directory for files.
-// For "s3", the remaining parameters configure the S3-compatible endpoint.
-func New(storeType, renderDir, endpoint, bucket, accessKey, secretKey, region string, useSSL bool) (RenderStore, error) {
+// For "local", localDir is the base directory for files (keyPrefix is
+// ignored — callers use separate directories for separate namespaces).
+// For "s3", the remaining parameters configure the S3-compatible endpoint;
+// keyPrefix namespaces object keys (e.g. "renders/" vs "assets/") so a
+// single bucket can serve both without collisions.
+func New(storeType, localDir, endpoint, bucket, accessKey, secretKey, region string, useSSL bool, keyPrefix string) (RenderStore, error) {
 	switch storeType {
 	case "s3":
-		return NewS3(endpoint, bucket, accessKey, secretKey, region, useSSL)
+		return NewS3(endpoint, bucket, accessKey, secretKey, region, useSSL, keyPrefix)
 	default:
-		return NewLocal(renderDir), nil
+		return NewLocal(localDir), nil
 	}
 }

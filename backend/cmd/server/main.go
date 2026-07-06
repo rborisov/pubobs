@@ -63,6 +63,7 @@ func main() {
 		cfg.S3SecretKey,
 		cfg.S3Region,
 		cfg.S3UseSSL,
+		"renders/",
 	)
 	if err != nil {
 		log.Fatalf("render store: %v", err)
