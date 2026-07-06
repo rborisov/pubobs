@@ -376,7 +376,7 @@ export interface StorageSettingsUpdate {
   s3_endpoint: string;
   s3_bucket: string;
   s3_access_key: string;
-  s3_secret_key: string;
+  s3_secret_key: string; // blank string means "keep existing" server-side
   s3_region: string;
   s3_use_ssl: boolean;
 }
