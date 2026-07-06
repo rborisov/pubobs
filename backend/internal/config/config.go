@@ -25,8 +25,9 @@ type Config struct {
 	DiskWarnPct        float64
 	DiskCritPct        float64
 	DBPath             string
-	RenderStoreType string // "local" (default) or "s3"
-	RenderDir       string // base dir for local store
+	RenderStoreType string // "local" (default) or "s3" — bootstrap default only, see storage_settings table
+	RenderDir       string // base dir for local render-blob store
+	AssetDir        string // base dir for local asset store
 	S3Endpoint      string
 	S3Bucket        string
 	S3AccessKey     string
@@ -58,11 +59,14 @@ func Load() (*Config, error) {
 	}
 
 	defaultRenderDir := filepath.Join(home, ".pubobs", "renders")
+	defaultAssetDir := filepath.Join(home, ".pubobs", "assets")
 	if _, err := os.Stat("/data"); err == nil {
 		defaultRenderDir = "/data/renders"
+		defaultAssetDir = "/data/assets"
 	}
 	cfg.RenderStoreType = getEnv("PUBOBS_RENDER_STORE", "local")
 	cfg.RenderDir       = getEnv("PUBOBS_RENDER_DIR", defaultRenderDir)
+	cfg.AssetDir        = getEnv("PUBOBS_ASSET_DIR", defaultAssetDir)
 	cfg.S3Endpoint      = getEnv("PUBOBS_S3_ENDPOINT", "")
 	cfg.S3Bucket        = getEnv("PUBOBS_S3_BUCKET", "")
 	cfg.S3AccessKey     = getEnv("PUBOBS_S3_ACCESS_KEY", "")

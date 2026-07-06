@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -54,28 +55,54 @@ func main() {
 		providers = append(providers, &auth.NamedProvider{ID: "yandex", Name: "Sign in with Yandex", Client: yandex})
 	}
 
+	appStore := store.New(database)
+
+	storageSettings, err := loadOrSeedStorageSettings(ctx, appStore, cfg)
+	if err != nil {
+		log.Fatalf("load storage settings: %v", err)
+	}
+
 	rs, err := renderstore.New(
-		cfg.RenderStoreType,
-		cfg.RenderDir,
-		cfg.S3Endpoint,
-		cfg.S3Bucket,
-		cfg.S3AccessKey,
-		cfg.S3SecretKey,
-		cfg.S3Region,
-		cfg.S3UseSSL,
+		storageSettings.StoreType, cfg.RenderDir,
+		storageSettings.S3Endpoint, storageSettings.S3Bucket,
+		storageSettings.S3AccessKey, storageSettings.S3SecretKey,
+		storageSettings.S3Region, storageSettings.S3UseSSL,
 		"renders/",
 	)
 	if err != nil {
 		log.Fatalf("render store: %v", err)
 	}
 
+	assetKeyBytes, err := hex.DecodeString(storageSettings.AssetEncryptionKey)
+	if err != nil || len(assetKeyBytes) != 32 {
+		log.Fatalf("invalid asset encryption key in storage_settings")
+	}
+	assetBase, err := renderstore.New(
+		storageSettings.StoreType, cfg.AssetDir,
+		storageSettings.S3Endpoint, storageSettings.S3Bucket,
+		storageSettings.S3AccessKey, storageSettings.S3SecretKey,
+		storageSettings.S3Region, storageSettings.S3UseSSL,
+		"assets/",
+	)
+	if err != nil {
+		log.Fatalf("asset store: %v", err)
+	}
+	as, err := renderstore.NewEncryptingStore(assetBase, assetKeyBytes)
+	if err != nil {
+		log.Fatalf("encrypting asset store: %v", err)
+	}
+
+	renderSwap := renderstore.NewSwappableStore(rs)
+	assetSwap := renderstore.NewSwappableStore(as)
+
 	deps := &api.Deps{
-		Store:         store.New(database),
+		Store:         appStore,
 		Cache:         gitcache.NewCache(cfg.RepoCacheDir),
 		Auth:          auth.NewSessionStore(),
 		OIDCProviders: providers,
 		Config:        cfg,
-		RenderStore:   rs,
+		RenderStore:   renderSwap,
+		AssetStore:    assetSwap,
 	}
 
 	jobs.StartEvictionJob(ctx, deps.Store, deps.Cache, cfg)

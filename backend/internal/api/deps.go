@@ -15,7 +15,8 @@ type Deps struct {
 	Auth          *auth.SessionStore
 	OIDCProviders []*auth.NamedProvider
 	Config        *config.Config
-	RenderStore   renderstore.RenderStore
+	RenderStore   *renderstore.SwappableStore
+	AssetStore    *renderstore.SwappableStore
 }
 
 // oidcProvider returns the named provider by ID, or nil if not found.

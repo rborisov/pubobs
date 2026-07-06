@@ -48,7 +48,7 @@ func newTestDepsWithCache(t *testing.T) *api.Deps {
 	t.Helper()
 	deps := newTestDeps(t)
 	deps.Cache = gitcache.NewCache(t.TempDir())
-	deps.RenderStore = renderstore.NewLocal(t.TempDir())
+	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
 	return deps
 }
 
