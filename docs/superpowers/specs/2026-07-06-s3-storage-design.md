@@ -41,30 +41,29 @@ existing local data migratable to S3 on demand.
   backends as opaque already-encrypted bytes, same as now.
 - No per-repo storage configuration. One shared backend configuration serves
   the whole instance.
-- No live-reload of storage settings without a restart (see "Apply model"
-  below) — deliberately simple over building reload plumbing through every
-  handler that holds a concrete store reference.
 
 ## Architecture
 
 ### Storage abstraction
 
-Generalize the existing `backend/internal/renderstore` package into
-`backend/internal/blobstore`, with the same interface shape, keyed generically
-instead of by `(repoID, notePath)`:
+Reuse the existing `backend/internal/renderstore` package's `RenderStore`
+interface as-is — it's already generic in shape (`Write/Read/Delete(repoID,
+path string, data []byte)`) despite its render-specific name, so no rename or
+new package is needed:
 
 ```go
-type BlobStore interface {
-    Write(key string, data []byte) error
-    Read(key string) ([]byte, error)
-    Delete(key string) error
+type RenderStore interface {
+    Write(repoID, notePath string, data []byte) error
+    Read(repoID, notePath string) ([]byte, error)
+    Delete(repoID, notePath string) error
 }
 
-func New(settings StorageSettings) (BlobStore, error) // "local" or "s3"
+func New(storeType, localDir, endpoint, bucket, accessKey, secretKey, region string, useSSL bool, keyPrefix string) (RenderStore, error) // "local" or "s3"
 ```
 
-The existing `local.go`/`s3.go` implementations move over largely unchanged.
-Callers namespace keys themselves:
+The `keyPrefix` parameter (added to `New`/`NewS3`) namespaces S3 object keys
+so one bucket serves both without collision. Callers namespace keys
+themselves:
 
 - Render blobs: `renders/{repoID}/{notePath}`
 - Assets: `assets/{repoID}/{assetPath}`
@@ -135,28 +134,33 @@ settings (write a small test object, read it back, delete it) so a bad
 bucket/credential is caught immediately rather than bricking the instance on
 next boot.
 
-### Apply model: restart-to-apply
+### Apply model: live swap, no restart
 
-Saving valid new settings writes them to the DB, then the handler exits the
-process. Docker's existing `restart: unless-stopped` policy brings the
-container back up, which reads the (now-updated) settings on boot. The admin
-UI shows a "restarting…" state and polls `/healthz` until the instance is
-back.
+Revised after pre-flight review flagged the original restart-to-apply design
+(handler calls `os.Exit(0)`, relying on Docker to restart) as an
+architectural smell — a settings-save request taking down the whole process
+is exactly the kind of thing a reviewer should stop, not wave through.
 
-This deliberately avoids building live-reload plumbing through every part of
-the code that currently holds a concrete store reference at startup — a
-restart is simple, correct, and a few seconds of downtime for a config change
-on a single-admin self-hosted instance is an acceptable trade.
+Instead, `Deps.RenderStore` and `Deps.AssetStore` are backed by a small
+`SwappableStore` wrapper that itself implements the `RenderStore` interface
+by delegating to a `current RenderStore` under a `sync.RWMutex`. Saving valid
+new settings constructs the new backend (already validated by the write/read/
+delete round-trip), then calls `Swap()` on both stores — every subsequent
+read/write goes to the new backend immediately, with no restart and no
+downtime. This is less code than the restart-to-apply plumbing it replaces
+(one small wrapper type vs. a goroutine/`os.Exit`/frontend-polling dance), and
+removes the "must not crash-loop on a bad config after a restart" concern
+entirely, since there's no restart in this design.
 
-`/healthz` must not depend on the configured store being reachable, so a
-misconfigured store (if validation somehow missed it) doesn't crash-loop the
-container — store errors surface per-request (404/500), not at boot.
+`/healthz` remains a static handler untouched by any of this — it never
+depended on store reachability and continues not to.
 
 ### Migration
 
 A "Migrate existing data to S3" action on the storage settings page, enabled
-once S3 settings are saved and the restart has completed. Triggers a
-background job (same pattern as the existing eviction job) that:
+once S3 settings are saved (the swap takes effect immediately, no restart to
+wait for). Triggers a background job (same pattern as the existing eviction
+job) that:
 
 1. Walks all repos' render blobs + assets currently on local disk.
 2. For each: reads local, writes to the new backend, reads back to verify,
@@ -188,14 +192,14 @@ directly answering whether the migration actually freed disk space.
 
 New view `frontend/src/views/storage-settings.ts`, linked from the
 instance-admin nav alongside Repos/Users/Groups/Allowlist. Contains: backend
-type + S3 field form, save button (triggers validate → save → restart flow),
-migration status/action section, and the disk-usage breakdown.
+type + S3 field form, save button (triggers validate → save → swap, no
+restart or polling needed), migration status/action section, and the
+disk-usage breakdown.
 
 ## Error handling
 
-- **Bad S3 config on save:** caught by the validation round-trip before
-  writing to DB/restarting.
-- **Startup resilience:** `/healthz` never depends on store reachability.
+- **Bad S3 config on save:** caught by the validation round-trip before the
+  swap happens — a rejected config never reaches `Swap()`.
 - **Migration failures:** per-file skip+log+retryable; never deletes a local
   copy before its remote write is verified; never aborts the whole run for
   one bad file.
@@ -204,12 +208,17 @@ migration status/action section, and the disk-usage breakdown.
 
 ## Testing
 
-- Unit tests for the `blobstore` local/S3 implementations (adapting the
-  existing `renderstore` tests).
+- Unit tests for the `renderstore` local/S3 implementations (existing) plus
+  `SwappableStore` (swap mid-flight redirects subsequent reads/writes).
 - Unit tests for `EncryptingStore`: round-trip correctness, and that
   tampered ciphertext fails to decrypt (GCM auth tag rejection).
 - Test that settings seed correctly from env vars on first boot, and are
   ignored on subsequent boots once the DB row exists.
+- A fake-S3-server test (`httptest.NewServer` serving a hand-built
+  `ListObjectsV2` XML response) for `S3RenderStore.ListAllObjects` — verified
+  directly against the real `minio-go` client during planning, not left as
+  an assumption; note minio-go requests `GET /{bucket}/` with a *trailing
+  slash*, which a naive `httptest` mux pattern without one silently 404s.
 - Test for the migration job's core logic (migrate + verify + delete-local,
   and skip-on-failure), following the existing `RunEvictionCycle`
   exported-for-testing pattern.
