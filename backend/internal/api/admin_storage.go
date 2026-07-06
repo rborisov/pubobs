@@ -82,13 +82,6 @@ func handleAdminUpdateStorageSettings(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		if body.StoreType == "s3" {
-			if err := validateS3Settings(body); err != nil {
-				writeError(w, http.StatusBadRequest, "S3 settings invalid: "+err.Error())
-				return
-			}
-		}
-
 		current, err := deps.Store.GetStorageSettings(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "load storage settings failed")
@@ -103,6 +96,17 @@ func handleAdminUpdateStorageSettings(deps *Deps) http.HandlerFunc {
 		}
 		current.S3Region = body.S3Region
 		current.S3UseSSL = body.S3UseSSL
+
+		// Validate the merged candidate (current), not the raw request body:
+		// when s3_secret_key is left blank to "keep existing", body.S3SecretKey
+		// is empty but current.S3SecretKey holds the real preserved secret —
+		// validating body directly would spuriously fail auth against "".
+		if current.StoreType == "s3" {
+			if err := S3ValidateFunc(current); err != nil {
+				writeError(w, http.StatusBadRequest, "S3 settings invalid: "+err.Error())
+				return
+			}
+		}
 
 		newRenderStore, err := renderstore.New(
 			current.StoreType, deps.Config.RenderDir,
@@ -147,14 +151,24 @@ func handleAdminUpdateStorageSettings(deps *Deps) http.HandlerFunc {
 	}
 }
 
+// S3ValidateFunc performs the S3 round-trip validation used by
+// handleAdminUpdateStorageSettings. It's a variable (rather than a plain
+// function call) so tests can substitute a fake round-trip and assert on
+// the effective settings that reached validation, without needing a live
+// S3-compatible endpoint.
+var S3ValidateFunc = validateS3Settings
+
 // validateS3Settings does a write+read+delete round-trip against the
 // candidate settings before they're persisted or swapped in, so a bad
 // bucket/credential is caught immediately rather than silently breaking
-// reads/writes after the swap.
-func validateS3Settings(body updateStorageSettingsBody) error {
+// reads/writes after the swap. Callers must pass the merged/effective
+// settings (e.g. current after applying the request body), not the raw
+// request body, so that a blank s3_secret_key ("keep existing") validates
+// against the real preserved secret rather than an empty string.
+func validateS3Settings(s *model.StorageSettings) error {
 	testStore, err := renderstore.NewS3(
-		body.S3Endpoint, body.S3Bucket, body.S3AccessKey, body.S3SecretKey,
-		body.S3Region, body.S3UseSSL, "pubobs-validate/",
+		s.S3Endpoint, s.S3Bucket, s.S3AccessKey, s.S3SecretKey,
+		s.S3Region, s.S3UseSSL, "pubobs-validate/",
 	)
 	if err != nil {
 		return err

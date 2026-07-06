@@ -82,6 +82,58 @@ func TestAdminStorageSettings_putRejectsInvalidS3Config(t *testing.T) {
 	require.True(t, isLocal, "RenderStore must still be the original local store")
 }
 
+// TestAdminStorageSettings_putS3BlankSecretValidatesPreservedSecret guards
+// against a regression where the handler validated the raw request body
+// (whose s3_secret_key is blank when the admin means "keep existing")
+// instead of the merged candidate that actually gets persisted/swapped in.
+// There's no live S3 fixture in this repo, so instead of hitting a real
+// endpoint we swap api.S3ValidateFunc for a fake that just records the
+// secret it was called with — this proves the *effective* secret reaching
+// validation is the preserved one, not "", without needing network access.
+func TestAdminStorageSettings_putS3BlankSecretValidatesPreservedSecret(t *testing.T) {
+	deps := newTestDepsForStorage(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.UpsertStorageSettings(ctx, &model.StorageSettings{
+		StoreType:          "s3",
+		S3Endpoint:         "s3.example.com:9000",
+		S3Bucket:           "old-bucket",
+		S3AccessKey:        "AKIAOLD",
+		S3SecretKey:        "super-secret-existing-key",
+		S3Region:           "us-east-1",
+		S3UseSSL:           false,
+		MigrationStatus:    "idle",
+		AssetEncryptionKey: strings.Repeat("00", 32),
+	})
+
+	var capturedSecret string
+	var capturedBucket string
+	origValidate := api.S3ValidateFunc
+	api.S3ValidateFunc = func(s *model.StorageSettings) error {
+		capturedSecret = s.S3SecretKey
+		capturedBucket = s.S3Bucket
+		return nil // stand-in for a successful round-trip against a real endpoint
+	}
+	defer func() { api.S3ValidateFunc = origValidate }()
+
+	// Change the bucket but leave s3_secret_key blank — the documented way
+	// to keep the existing secret.
+	body := `{"store_type":"s3","s3_endpoint":"s3.example.com:9000","s3_bucket":"new-bucket","s3_access_key":"AKIAOLD","s3_secret_key":"","s3_region":"us-east-1","s3_use_ssl":false}`
+	req := httptest.NewRequest("PUT", "/api/admin/storage-settings", strings.NewReader(body))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, "super-secret-existing-key", capturedSecret, "validation must run against the preserved existing secret, not an empty string")
+	require.Equal(t, "new-bucket", capturedBucket, "validation must see the newly requested bucket")
+
+	saved, err := deps.Store.GetStorageSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "new-bucket", saved.S3Bucket)
+	require.Equal(t, "super-secret-existing-key", saved.S3SecretKey, "existing secret must be preserved in the persisted config")
+}
+
 func TestAdminStorageSettings_putAppliesLive(t *testing.T) {
 	deps := newTestDepsForStorage(t)
 	ctx := context.Background()
