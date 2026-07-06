@@ -93,6 +93,22 @@ CREATE TABLE IF NOT EXISTS system_health (
     checked_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS storage_settings (
+    id                   INTEGER PRIMARY KEY CHECK (id = 1),
+    store_type           TEXT    NOT NULL DEFAULT 'local', -- 'local' | 's3'
+    s3_endpoint          TEXT    NOT NULL DEFAULT '',
+    s3_bucket            TEXT    NOT NULL DEFAULT '',
+    s3_access_key        TEXT    NOT NULL DEFAULT '',
+    s3_secret_key        TEXT    NOT NULL DEFAULT '',
+    s3_region            TEXT    NOT NULL DEFAULT '',
+    s3_use_ssl           INTEGER NOT NULL DEFAULT 1,
+    asset_encryption_key TEXT    NOT NULL DEFAULT '', -- 64 hex chars (32 bytes), generated on first boot
+    migration_status     TEXT    NOT NULL DEFAULT 'idle', -- 'idle' | 'running' | 'done' | 'failed'
+    migration_total      INTEGER NOT NULL DEFAULT 0,
+    migration_done       INTEGER NOT NULL DEFAULT 0,
+    updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS registration_allowlist (
     id         TEXT PRIMARY KEY,
     pattern    TEXT UNIQUE NOT NULL, -- exact email or @domain.com suffix

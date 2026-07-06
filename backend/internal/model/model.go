@@ -98,6 +98,22 @@ type SystemHealth struct {
 	CheckedAt      time.Time
 }
 
+type StorageSettings struct {
+	ID                 int
+	StoreType          string // "local" | "s3"
+	S3Endpoint         string
+	S3Bucket           string
+	S3AccessKey        string
+	S3SecretKey        string
+	S3Region           string
+	S3UseSSL           bool
+	AssetEncryptionKey string // hex-encoded, 32 bytes
+	MigrationStatus    string // "idle" | "running" | "done" | "failed"
+	MigrationTotal     int
+	MigrationDone      int
+	UpdatedAt          time.Time
+}
+
 // Commit is a git log entry returned by the history API.
 type Commit struct {
 	SHA         string    `json:"sha"`
