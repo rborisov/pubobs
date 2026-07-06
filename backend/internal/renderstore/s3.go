@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -69,4 +70,31 @@ func (s *S3RenderStore) Delete(repoID, notePath string) error {
 		return nil
 	}
 	return err
+}
+
+// ListAllObjects returns every object currently in the bucket (across all
+// prefixes) — the caller filters/sums by prefix as needed. Uses minio's
+// recursive listing so it pages through the full bucket regardless of size.
+func (s *S3RenderStore) ListAllObjects() ([]minio.ObjectInfo, error) {
+	var all []minio.ObjectInfo
+	for obj := range s.client.ListObjects(context.Background(), s.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if obj.Err != nil {
+			return nil, obj.Err
+		}
+		all = append(all, obj)
+	}
+	return all, nil
+}
+
+// SumObjectSizesWithPrefix sums the sizes of objects whose key starts with
+// prefix — a small pure function so the filtering logic is unit-testable
+// without a live S3 endpoint.
+func SumObjectSizesWithPrefix(objects []minio.ObjectInfo, prefix string) int64 {
+	var total int64
+	for _, obj := range objects {
+		if strings.HasPrefix(obj.Key, prefix) {
+			total += obj.Size
+		}
+	}
+	return total
 }

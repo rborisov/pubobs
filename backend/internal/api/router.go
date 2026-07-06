@@ -93,6 +93,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Put("/api/admin/groups/{id}/members/{userID}/role", handleAdminSetGroupMemberRole(deps))
 		r.Get("/api/admin/storage-settings", handleAdminGetStorageSettings(deps))
 		r.Put("/api/admin/storage-settings", handleAdminUpdateStorageSettings(deps))
+		r.Get("/api/admin/storage-usage", handleAdminStorageUsage(deps))
 	})
 
 	// Public reader (no auth)

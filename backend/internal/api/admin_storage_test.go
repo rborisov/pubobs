@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pubobs/backend/internal/api"
+	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 	"github.com/pubobs/backend/internal/renderstore"
 	"github.com/stretchr/testify/require"
@@ -156,4 +159,31 @@ func TestAdminStorageSettings_putAppliesLive(t *testing.T) {
 	got, err := deps.RenderStore.Read("r1", "note.md")
 	require.NoError(t, err)
 	require.Equal(t, []byte("after-swap"), got)
+}
+
+func TestAdminStorageUsage_reportsLocalBreakdown(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.UpsertStorageSettings(ctx, &model.StorageSettings{StoreType: "local", MigrationStatus: "idle"})
+
+	deps.Config.RepoCacheDir = t.TempDir()
+	deps.Config.RenderDir = t.TempDir()
+	deps.Config.AssetDir = t.TempDir()
+	deps.Cache = gitcache.NewCache(deps.Config.RepoCacheDir)
+	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(deps.Config.RenderDir))
+	deps.AssetStore = renderstore.NewSwappableStore(renderstore.NewLocal(deps.Config.AssetDir))
+
+	require.NoError(t, os.WriteFile(filepath.Join(deps.Config.RenderDir, "x.enc"), []byte("12345"), 0644))
+
+	req := httptest.NewRequest("GET", "/api/admin/storage-usage", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	require.Equal(t, float64(5), body["local_renders_bytes"])
+	require.Equal(t, float64(0), body["s3_renders_bytes"], "no S3 configured in this test")
 }

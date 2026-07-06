@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/pubobs/backend/internal/auth"
 	"github.com/pubobs/backend/internal/model"
@@ -186,4 +188,49 @@ func validateS3Settings(s *model.StorageSettings) error {
 		return errValidationMismatch
 	}
 	return testStore.Delete("_validate", testKey)
+}
+
+func dirSizeBytes(dir string) int64 {
+	var total int64
+	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
+}
+
+func handleAdminStorageUsage(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+
+		freeBytes, _, err := deps.Cache.DiskUsage()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "disk usage check failed")
+			return
+		}
+
+		usage := map[string]any{
+			"local_free_bytes":    freeBytes,
+			"local_repos_bytes":   dirSizeBytes(deps.Config.RepoCacheDir),
+			"local_renders_bytes": dirSizeBytes(deps.Config.RenderDir),
+			"local_assets_bytes":  dirSizeBytes(deps.Config.AssetDir),
+			"s3_renders_bytes":    int64(0),
+			"s3_assets_bytes":     int64(0),
+		}
+
+		if s3Renders, ok := deps.RenderStore.Current().(*renderstore.S3RenderStore); ok {
+			if objects, err := s3Renders.ListAllObjects(); err == nil {
+				usage["s3_renders_bytes"] = renderstore.SumObjectSizesWithPrefix(objects, "renders/")
+				usage["s3_assets_bytes"] = renderstore.SumObjectSizesWithPrefix(objects, "assets/")
+			}
+		}
+
+		writeJSON(w, http.StatusOK, usage)
+	}
 }
