@@ -279,12 +279,39 @@ func handleAdminMigrateStorage(deps *Deps) http.HandlerFunc {
 // these settings, so this is live immediately, no restart) — i.e. it's
 // always "local → whatever's configured now", matching this feature's
 // actual use case of moving *off* local disk.
+//
+// Assets need special care here: deps.AssetStore is always an
+// EncryptingStore-wrapped SwappableStore (assets are encrypted at rest,
+// unlike render blobs), and the bytes already sitting in
+// deps.Config.AssetDir are already ciphertext — written by the live
+// EncryptingStore during normal sync. Migration must copy those bytes
+// as-is to the new backend, NOT push them back through another
+// EncryptingStore.Write, which would encrypt already-encrypted bytes a
+// second time. The verify-before-delete step in RunMigrationCycle can't
+// catch this on its own: writing ciphertext C through the encrypting
+// destination stores encrypt(C), but reading it back for verification
+// decrypts once and yields C again — an apparent match that hides
+// permanent, silent corruption (and the local source copy would then be
+// deleted). So the asset destination here is the *plain* store the live
+// EncryptingStore wraps (via Inner()) — the exact same backend location
+// deps.AssetStore already points at (Swap() already ran when the admin
+// saved these settings), reached with no encryption applied — a raw
+// ciphertext-to-ciphertext copy, mirroring how renders (never server-side
+// encrypted) are already migrated correctly. If deps.AssetStore somehow
+// isn't wrapped in an EncryptingStore (shouldn't happen in production, but
+// some older tests wire it up as a plain store directly), there's nothing
+// to unwrap and the store is used as-is.
 func runMigrationInBackground(deps *Deps) {
 	ctx := context.Background()
 	localRenders := renderstore.NewLocal(deps.Config.RenderDir)
 	localAssets := renderstore.NewLocal(deps.Config.AssetDir)
 
-	migrated, failed, err := jobs.RunMigrationCycle(ctx, localRenders, deps.RenderStore, localAssets, deps.AssetStore)
+	assetDest := deps.AssetStore.Current()
+	if enc, ok := assetDest.(*renderstore.EncryptingStore); ok {
+		assetDest = enc.Inner()
+	}
+
+	migrated, failed, err := jobs.RunMigrationCycle(ctx, localRenders, deps.RenderStore, localAssets, assetDest)
 
 	settings, gerr := deps.Store.GetStorageSettings(ctx)
 	if gerr != nil {

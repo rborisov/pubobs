@@ -2,6 +2,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -203,6 +204,93 @@ func TestAdminStorageMigrate_startsAndReportsProgress(t *testing.T) {
 	migrated, err := deps.RenderStore.Read("r1", "note.md")
 	require.NoError(t, err)
 	require.Equal(t, []byte("data"), migrated)
+}
+
+// TestAdminStorageMigrate_assetsNotDoubleEncrypted guards against the
+// critical data-destructive bug where asset migration wrote already-
+// encrypted bytes back through the live EncryptingStore, encrypting them a
+// second time (silently, since the verify-before-delete step in
+// jobs.RunMigrationCycle decrypts once and gets a false-positive match
+// against the still-ciphertext "expected" value). Production always wires
+// deps.AssetStore as an EncryptingStore-wrapped SwappableStore, but every
+// other migration test in this file (see newTestDepsForStorage and
+// TestAdminStorageMigrate_startsAndReportsProgress) uses a plain, unwrapped
+// SwappableStore(NewLocal(...)) for AssetStore — which is exactly why the
+// bug shipped without a failing test. This test wires AssetStore the way
+// main.go actually does.
+func TestAdminStorageMigrate_assetsNotDoubleEncrypted(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+
+	assetKey := bytes.Repeat([]byte{0x07}, 32)
+
+	// Old/local backend: seed it with a real ciphertext blob, written the
+	// same way normal sync would — through an EncryptingStore wrapping the
+	// directory that becomes deps.Config.AssetDir (the migration source).
+	deps.Config.RenderDir = t.TempDir()
+	deps.Config.AssetDir = t.TempDir()
+	oldAssetBase := renderstore.NewLocal(deps.Config.AssetDir)
+	oldEncrypting, err := renderstore.NewEncryptingStore(oldAssetBase, assetKey)
+	require.NoError(t, err)
+	plaintext := []byte("original asset bytes, e.g. a PNG's contents")
+	require.NoError(t, oldEncrypting.Write("r1", "photo.png", plaintext))
+	sourceCiphertext, err := oldAssetBase.Read("r1", "photo.png")
+	require.NoError(t, err)
+
+	// New backend (stands in for "S3", same as the other migration test):
+	// deps.AssetStore is already swapped to an EncryptingStore wrapping this
+	// directory, exactly as handleAdminUpdateStorageSettings does when the
+	// admin saves S3 settings — Swap() has already happened by the time
+	// migration runs.
+	newAssetDir := t.TempDir()
+	newAssetBase := renderstore.NewLocal(newAssetDir)
+	newEncrypting, err := renderstore.NewEncryptingStore(newAssetBase, assetKey)
+	require.NoError(t, err)
+	deps.AssetStore = renderstore.NewSwappableStore(newEncrypting)
+	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
+
+	deps.Store.UpsertStorageSettings(ctx, &model.StorageSettings{StoreType: "s3", MigrationStatus: "idle"})
+
+	req := httptest.NewRequest("POST", "/api/admin/storage-migrate", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+
+	require.Eventually(t, func() bool {
+		settings, err := deps.Store.GetStorageSettings(ctx)
+		require.NoError(t, err)
+		return settings.MigrationStatus == "done"
+	}, 2*time.Second, 10*time.Millisecond)
+
+	settings, err := deps.Store.GetStorageSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, settings.MigrationTotal)
+	require.Equal(t, 1, settings.MigrationDone)
+
+	// The proof: reading through deps.AssetStore (the live EncryptingStore,
+	// already pointed at newAssetDir) must decrypt back to the ORIGINAL
+	// plaintext with a single decrypt pass. Before the fix, migration wrote
+	// the source ciphertext through this same encrypting store a second
+	// time, so this Read would decrypt once and return leftover ciphertext
+	// instead of the original bytes.
+	got, err := deps.AssetStore.Read("r1", "photo.png")
+	require.NoError(t, err)
+	require.Equal(t, plaintext, got, "migrated asset must decrypt to the original plaintext, not leftover ciphertext from double-encryption")
+
+	// Belt-and-suspenders: the raw bytes landing in the new backend must be
+	// byte-identical to the raw source ciphertext — a verbatim copy, proving
+	// no re-encryption pass happened in between.
+	rawNew, err := newAssetBase.Read("r1", "photo.png")
+	require.NoError(t, err)
+	require.Equal(t, sourceCiphertext, rawNew, "migrated ciphertext must be byte-identical to the source ciphertext — no re-encryption")
+
+	// And the local source copy should have been cleaned up after a
+	// genuine (not falsely-passing) verification.
+	remaining, err := oldAssetBase.Read("r1", "photo.png")
+	require.NoError(t, err)
+	require.Nil(t, remaining, "source ciphertext should be deleted after successful migration")
 }
 
 func TestAdminStorageUsage_reportsLocalBreakdown(t *testing.T) {

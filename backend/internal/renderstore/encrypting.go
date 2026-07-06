@@ -64,6 +64,16 @@ func (e *EncryptingStore) Delete(repoID, notePath string) error {
 	return e.inner.Delete(repoID, notePath)
 }
 
+// Inner returns the plain store this EncryptingStore wraps — the same
+// backend location, holding ciphertext, with no encryption/decryption
+// applied. Used by storage migration, which must copy already-encrypted
+// asset bytes verbatim to the new backend rather than writing them through
+// the encrypting layer again (which would encrypt already-ciphertext bytes
+// a second time).
+func (e *EncryptingStore) Inner() RenderStore {
+	return e.inner
+}
+
 func (e *EncryptingStore) gcm() (cipher.AEAD, error) {
 	block, err := aes.NewCipher(e.key)
 	if err != nil {
