@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pubobs/backend/internal/api"
 	"github.com/pubobs/backend/internal/gitcache"
@@ -165,6 +166,43 @@ func TestAdminStorageSettings_putAppliesLive(t *testing.T) {
 	got, err := deps.RenderStore.Read("r1", "note.md")
 	require.NoError(t, err)
 	require.Equal(t, []byte("after-swap"), got)
+}
+
+func TestAdminStorageMigrate_startsAndReportsProgress(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+
+	deps.Config.RenderDir = t.TempDir()
+	deps.Config.AssetDir = t.TempDir()
+	localSource := renderstore.NewLocal(deps.Config.RenderDir)
+	require.NoError(t, localSource.Write("r1", "note.md", []byte("data")))
+
+	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir())) // stands in for "the S3 destination"
+	deps.AssetStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
+	deps.Store.UpsertStorageSettings(ctx, &model.StorageSettings{StoreType: "s3", MigrationStatus: "idle"})
+
+	req := httptest.NewRequest("POST", "/api/admin/storage-migrate", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+
+	// The handler runs the migration in a goroutine — poll briefly for it to finish.
+	require.Eventually(t, func() bool {
+		settings, err := deps.Store.GetStorageSettings(ctx)
+		require.NoError(t, err)
+		return settings.MigrationStatus == "done"
+	}, 2*time.Second, 10*time.Millisecond)
+
+	settings, err := deps.Store.GetStorageSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, settings.MigrationTotal)
+	require.Equal(t, 1, settings.MigrationDone)
+
+	migrated, err := deps.RenderStore.Read("r1", "note.md")
+	require.NoError(t, err)
+	require.Equal(t, []byte("data"), migrated)
 }
 
 func TestAdminStorageUsage_reportsLocalBreakdown(t *testing.T) {

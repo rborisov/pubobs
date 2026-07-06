@@ -2,13 +2,16 @@
 package api
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/jobs"
 	"github.com/pubobs/backend/internal/model"
 	"github.com/pubobs/backend/internal/renderstore"
 )
@@ -232,5 +235,70 @@ func handleAdminStorageUsage(deps *Deps) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, usage)
+	}
+}
+
+func handleAdminMigrateStorage(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		if !requireAdmin(claims, w) {
+			return
+		}
+
+		settings, err := deps.Store.GetStorageSettings(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "load storage settings failed")
+			return
+		}
+		if settings.StoreType == "local" {
+			writeError(w, http.StatusBadRequest, "configure S3 storage before migrating")
+			return
+		}
+		if settings.MigrationStatus == "running" {
+			writeError(w, http.StatusConflict, "migration already running")
+			return
+		}
+
+		settings.MigrationStatus = "running"
+		settings.MigrationTotal = 0
+		settings.MigrationDone = 0
+		if err := deps.Store.UpsertStorageSettings(r.Context(), settings); err != nil {
+			writeError(w, http.StatusInternalServerError, "save storage settings failed")
+			return
+		}
+
+		go runMigrationInBackground(deps)
+
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "running"})
+	}
+}
+
+// runMigrationInBackground migrates from the currently-configured local
+// render/asset stores to whatever deps.RenderStore/deps.AssetStore already
+// point at (Task 7's handler already called Swap() when the admin saved
+// these settings, so this is live immediately, no restart) — i.e. it's
+// always "local → whatever's configured now", matching this feature's
+// actual use case of moving *off* local disk.
+func runMigrationInBackground(deps *Deps) {
+	ctx := context.Background()
+	localRenders := renderstore.NewLocal(deps.Config.RenderDir)
+	localAssets := renderstore.NewLocal(deps.Config.AssetDir)
+
+	migrated, failed, err := jobs.RunMigrationCycle(ctx, localRenders, deps.RenderStore, localAssets, deps.AssetStore)
+
+	settings, gerr := deps.Store.GetStorageSettings(ctx)
+	if gerr != nil {
+		fmt.Printf("migration: reload settings after run: %v\n", gerr)
+		return
+	}
+	settings.MigrationTotal = migrated + failed
+	settings.MigrationDone = migrated
+	if err != nil {
+		settings.MigrationStatus = "failed"
+	} else {
+		settings.MigrationStatus = "done"
+	}
+	if uerr := deps.Store.UpsertStorageSettings(ctx, settings); uerr != nil {
+		fmt.Printf("migration: save final status: %v\n", uerr)
 	}
 }
