@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pubobs/backend/internal/model"
@@ -37,6 +38,38 @@ func (s *Store) ListRepos(ctx context.Context) ([]*model.Repo, error) {
 		       local_path, cloned_at, last_used_at, created_at, allow_guest,
 		       storage_destination_id, migration_status, migration_total, migration_done
 		FROM repos ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*model.Repo
+	for rows.Next() {
+		r, err := scanRepo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// getReposByIDs fetches multiple repos in a single query instead of one
+// round trip per ID, so callers resolving access lists don't pay an N+1 cost.
+func (s *Store) getReposByIDs(ctx context.Context, ids []string) ([]*model.Repo, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id, name, remote_url, encrypted_creds, default_branch,
+		       local_path, cloned_at, last_used_at, created_at, allow_guest,
+		       storage_destination_id, migration_status, migration_total, migration_done
+		FROM repos WHERE id IN (%s) ORDER BY name`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return nil, err
 	}

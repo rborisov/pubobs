@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pubobs/backend/internal/model"
 )
@@ -86,7 +87,19 @@ func (s *Store) ListUserRepos(ctx context.Context, userID string) ([]*model.Repo
 	if err != nil {
 		return nil, fmt.Errorf("get user groups: %w", err)
 	}
+	repoIDs, err := s.accessibleRepoIDs(ctx, userID, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	// A single batched fetch instead of one GetRepo round trip per repo ID —
+	// with many repos this was the dominant cost of loading a member's
+	// dashboard on the single shared SQLite connection.
+	return s.getReposByIDs(ctx, repoIDs)
+}
 
+// accessibleRepoIDs returns the deduplicated set of repo IDs reachable by the
+// user directly or through any of the given groups.
+func (s *Store) accessibleRepoIDs(ctx context.Context, userID string, groupIDs []string) ([]string, error) {
 	seen := map[string]bool{}
 
 	rows, err := s.db.QueryContext(ctx,
@@ -94,36 +107,105 @@ func (s *Store) ListUserRepos(ctx context.Context, userID string) ([]*model.Repo
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var rid string
-		rows.Scan(&rid)
+		if err := rows.Scan(&rid); err != nil {
+			rows.Close()
+			return nil, err
+		}
 		seen[rid] = true
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
 
-	for _, gid := range groupIDs {
-		rows2, err := s.db.QueryContext(ctx,
-			`SELECT DISTINCT repo_id FROM repo_access WHERE principal_type='group' AND principal_id=?`, gid)
+	if len(groupIDs) > 0 {
+		placeholders := make([]string, len(groupIDs))
+		args := make([]interface{}, len(groupIDs))
+		for i, gid := range groupIDs {
+			placeholders[i] = "?"
+			args[i] = gid
+		}
+		query := fmt.Sprintf(
+			`SELECT DISTINCT repo_id FROM repo_access WHERE principal_type='group' AND principal_id IN (%s)`,
+			strings.Join(placeholders, ","))
+		rows2, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows2.Next() {
 			var rid string
-			rows2.Scan(&rid)
+			if err := rows2.Scan(&rid); err != nil {
+				rows2.Close()
+				return nil, err
+			}
 			seen[rid] = true
+		}
+		if err := rows2.Err(); err != nil {
+			rows2.Close()
+			return nil, err
 		}
 		rows2.Close()
 	}
 
-	var out []*model.Repo
+	ids := make([]string, 0, len(seen))
 	for rid := range seen {
-		r, err := s.GetRepo(ctx, rid)
-		if err != nil {
+		ids = append(ids, rid)
+	}
+	return ids, nil
+}
+
+// GetUserRolesForRepos resolves the user's best role (direct or via group) on
+// each of the given repos in a single query, rather than the O(repos) round
+// trips (each re-fetching group membership) that calling GetUserRole in a
+// loop would cost. Repos the user has no access to are simply absent from
+// the returned map.
+func (s *Store) GetUserRolesForRepos(ctx context.Context, userID string, repoIDs []string) (map[string]string, error) {
+	roles := make(map[string]string, len(repoIDs))
+	if len(repoIDs) == 0 {
+		return roles, nil
+	}
+	groupIDs, err := s.GetUserGroupIDs(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user groups: %w", err)
+	}
+
+	repoPlaceholders := make([]string, len(repoIDs))
+	args := make([]interface{}, 0, len(repoIDs)+len(groupIDs)+1)
+	for i, id := range repoIDs {
+		repoPlaceholders[i] = "?"
+		args = append(args, id)
+	}
+
+	principalClause := "(principal_type='user' AND principal_id=?)"
+	args = append(args, userID)
+	if len(groupIDs) > 0 {
+		groupPlaceholders := make([]string, len(groupIDs))
+		for i, gid := range groupIDs {
+			groupPlaceholders[i] = "?"
+			args = append(args, gid)
+		}
+		principalClause += fmt.Sprintf(" OR (principal_type='group' AND principal_id IN (%s))", strings.Join(groupPlaceholders, ","))
+	}
+
+	query := fmt.Sprintf(
+		`SELECT repo_id, role FROM repo_access WHERE repo_id IN (%s) AND (%s)`,
+		strings.Join(repoPlaceholders, ","), principalClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var repoID, role string
+		if err := rows.Scan(&repoID, &role); err != nil {
 			return nil, err
 		}
-		if r != nil {
-			out = append(out, r)
+		if roleOrder[role] > roleOrder[roles[repoID]] {
+			roles[repoID] = role
 		}
 	}
-	return out, nil
+	return roles, rows.Err()
 }

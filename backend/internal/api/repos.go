@@ -21,6 +21,23 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "list repos failed")
 			return
 		}
+
+		// Resolve roles for all repos in one batched query instead of one
+		// round trip per repo — with many repos this was the slow part of
+		// loading a member's dashboard on the single shared SQLite connection.
+		var roles map[string]string
+		if !claims.IsAdmin {
+			repoIDs := make([]string, len(repos))
+			for i, repo := range repos {
+				repoIDs[i] = repo.ID
+			}
+			roles, err = deps.Store.GetUserRolesForRepos(r.Context(), claims.UserID, repoIDs)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "list repos failed")
+				return
+			}
+		}
+
 		type repoResp struct {
 			ID                   string  `json:"id"`
 			Name                 string  `json:"name"`
@@ -36,7 +53,7 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 		for i, repo := range repos {
 			role := "admin"
 			if !claims.IsAdmin {
-				role, _ = deps.Store.GetUserRole(r.Context(), claims.UserID, repo.ID)
+				role = roles[repo.ID]
 			}
 			out[i] = repoResp{
 				ID: repo.ID, Name: repo.Name, RemoteURL: repo.RemoteURL,

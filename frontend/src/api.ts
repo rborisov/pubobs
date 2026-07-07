@@ -78,10 +78,33 @@ export const tokenStore = {
   },
 };
 
+const REQUEST_TIMEOUT_MS = 20000;
+
+/**
+ * fetch() has no built-in timeout, so a stalled request (dead connection,
+ * unresponsive proxy, backend stuck behind a slow query) used to leave the
+ * caller's promise — and the router's full-page spinner — hanging forever
+ * with no feedback. This aborts and raises a clear error instead.
+ */
+async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Request timed out — please check your connection and try again.');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function refreshTokens(): Promise<void> {
   const t = tokenStore.get();
   if (!t?.refreshToken) throw new Error('Not authenticated');
-  const resp = await fetch('/auth/refresh', {
+  const resp = await fetchWithTimeout('/auth/refresh', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh_token: t.refreshToken }),
@@ -102,7 +125,7 @@ export function applyTokenResponse(data: TokenResponse): void {
 async function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
   if (tokenStore.isExpired()) await refreshTokens();
   const t = tokenStore.get()!;
-  const resp = await fetch(input, {
+  const resp = await fetchWithTimeout(input, {
     ...init,
     headers: {
       ...init.headers,
@@ -126,7 +149,7 @@ async function json<T>(resp: Response): Promise<T> {
 }
 
 export async function exchangeToken(code: string, verifier: string): Promise<TokenResponse> {
-  const resp = await fetch('/auth/token', {
+  const resp = await fetchWithTimeout('/auth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, code_verifier: verifier }),
@@ -327,9 +350,9 @@ export interface PubNoteDetail {
 async function pubFetch(input: string): Promise<Response> {
   const t = tokenStore.get();
   if (t && !tokenStore.isExpired()) {
-    return fetch(input, { headers: { Authorization: `Bearer ${t.accessToken}` } });
+    return fetchWithTimeout(input, { headers: { Authorization: `Bearer ${t.accessToken}` } });
   }
-  return fetch(input);
+  return fetchWithTimeout(input);
 }
 
 export async function pubListNotes(repoId: string): Promise<{ repo: PubRepo; notes: PubNote[] }> {

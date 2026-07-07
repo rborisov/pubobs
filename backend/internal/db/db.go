@@ -13,15 +13,53 @@ import (
 var schema string
 
 func Open(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dsn)
+	// In-memory databases (used by tests) are per-connection — a second
+	// pooled connection would see a fresh, empty database — so they must
+	// stick to a single connection, same as before this function grew a
+	// real connection pool for on-disk databases.
+	isMemory := dsn == ":memory:" || strings.HasPrefix(dsn, "file::memory:")
+
+	openDSN := dsn
+	if !isMemory {
+		// modernc.org/sqlite needs its own `_pragma=name(value)` DSN syntax
+		// for settings that are per-connection (busy_timeout, foreign_keys);
+		// a plain `db.Exec("PRAGMA ...")` only configures whichever single
+		// connection happens to run it, which stopped being reliable once
+		// the pool below can open more than one connection.
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		openDSN = dsn + sep + "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	}
+
+	db, err := sql.Open("sqlite", openDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(1) // SQLite is single-writer
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+
+	if isMemory {
+		db.SetMaxOpenConns(1)
+		if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("enable foreign keys: %w", err)
+		}
+	} else {
+		// WAL is persisted in the database file itself (unlike the
+		// per-connection pragmas above), so setting it once here is enough.
+		// It lets readers proceed concurrently with the single writer,
+		// instead of every request in the process serializing behind one
+		// connection as MaxOpenConns(1) used to force — previously, one
+		// slow request (e.g. a large sync) could make unrelated reads
+		// (e.g. the repo list powering the dashboard) queue behind it for
+		// a long time.
+		if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("enable WAL mode: %w", err)
+		}
+		db.SetMaxOpenConns(4)
 	}
+
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)

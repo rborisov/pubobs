@@ -77,3 +77,41 @@ func TestGetUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", role)
 }
+
+func TestListUserReposAndBatchedRoles(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	s.UpsertUser(ctx, "u1", "a@x.com", "A")
+	s.CreateGroup(ctx, "g1", "Readers")
+	s.AddGroupMember(ctx, "g1", "u1", "member")
+
+	s.CreateRepo(ctx, "r1", "Direct repo", "https://x.com/r1.git", "c", "main")
+	s.CreateRepo(ctx, "r2", "Group repo", "https://x.com/r2.git", "c", "main")
+	s.CreateRepo(ctx, "r3", "No access repo", "https://x.com/r3.git", "c", "main")
+
+	require.NoError(t, s.GrantAccess(ctx, "acc1", "r1", "user", "u1", "editor"))
+	require.NoError(t, s.GrantAccess(ctx, "acc2", "r2", "group", "g1", "reader"))
+
+	repos, err := s.ListUserRepos(ctx, "u1")
+	require.NoError(t, err)
+	require.Len(t, repos, 2)
+	names := map[string]bool{}
+	for _, r := range repos {
+		names[r.Name] = true
+	}
+	require.True(t, names["Direct repo"])
+	require.True(t, names["Group repo"])
+	require.False(t, names["No access repo"])
+
+	roles, err := s.GetUserRolesForRepos(ctx, "u1", []string{"r1", "r2", "r3"})
+	require.NoError(t, err)
+	require.Equal(t, "editor", roles["r1"])
+	require.Equal(t, "reader", roles["r2"])
+	require.Equal(t, "", roles["r3"]) // absent key reads back as zero value
+
+	// A user with no access at all gets an empty list, not an error.
+	repos, err = s.ListUserRepos(ctx, "nobody")
+	require.NoError(t, err)
+	require.Len(t, repos, 0)
+}
