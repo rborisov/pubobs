@@ -1,7 +1,7 @@
 import {
   listRepos, listRepoAccess, grantAccess, revokeAccess, listUsers,
-  updateRepo, deleteRepo,
-  type Repo, type RepoAccess, type User,
+  updateRepo, deleteRepo, listStorageDestinations, assignRepoStorage,
+  type Repo, type RepoAccess, type User, type StorageDestination,
 } from '../api';
 import { navigate } from '../router';
 
@@ -12,14 +12,16 @@ export async function repoDetailView(id: string): Promise<HTMLElement> {
   let repo: Repo | undefined;
   let accessList: RepoAccess[];
   let users: User[];
+  let destinations: StorageDestination[];
 
   try {
-    const [repos, access, allUsers] = await Promise.all([
-      listRepos(), listRepoAccess(id), listUsers(),
+    const [repos, access, allUsers, dests] = await Promise.all([
+      listRepos(), listRepoAccess(id), listUsers(), listStorageDestinations(),
     ]);
     repo = repos.find(r => r.id === id);
     accessList = access;
     users = allUsers;
+    destinations = dests;
   } catch (e: unknown) {
     wrap.innerHTML = `<p style="color:#c00">${e instanceof Error ? e.message : String(e)}</p>`;
     return wrap;
@@ -30,11 +32,11 @@ export async function repoDetailView(id: string): Promise<HTMLElement> {
     return wrap;
   }
 
-  render(wrap, repo, accessList, users);
+  render(wrap, repo, accessList, users, destinations);
   return wrap;
 }
 
-function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: User[]): void {
+function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: User[], destinations: StorageDestination[]): void {
   wrap.innerHTML = '';
 
   const header = document.createElement('div');
@@ -60,6 +62,68 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
   `;
   wrap.appendChild(card);
 
+  const storageSection = document.createElement('div');
+  storageSection.style.cssText = 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:24px;font-size:0.875rem';
+  wrap.appendChild(storageSection);
+
+  const renderStorage = (): void => {
+    storageSection.innerHTML = '';
+
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;font-weight:600;color:#475569';
+    row.textContent = 'Storage';
+
+    const select = document.createElement('select');
+    select.style.cssText = 'padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.875rem;font-weight:normal';
+    const localOpt = document.createElement('option');
+    localOpt.value = '';
+    localOpt.textContent = 'Local';
+    select.appendChild(localOpt);
+    for (const dest of destinations) {
+      const opt = document.createElement('option');
+      opt.value = dest.id;
+      opt.textContent = dest.name;
+      select.appendChild(opt);
+    }
+    select.value = repo.storage_destination_id ?? '';
+    select.disabled = repo.migration_status === 'running';
+    row.appendChild(select);
+    storageSection.appendChild(row);
+
+    const errEl = document.createElement('div');
+    errEl.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin-top:8px';
+    storageSection.appendChild(errEl);
+
+    if (repo.migration_status === 'running') {
+      const status = document.createElement('div');
+      status.style.cssText = 'color:#64748b;margin-top:8px';
+      status.textContent = 'Migrating existing data to the new destination…';
+      storageSection.appendChild(status);
+    } else if (repo.migration_status === 'failed') {
+      const status = document.createElement('div');
+      status.style.cssText = 'color:#c00;margin-top:8px';
+      status.textContent = 'Last migration failed — check server logs; data may be split across destinations.';
+      storageSection.appendChild(status);
+    }
+
+    select.addEventListener('change', async () => {
+      const newDestId = select.value || null;
+      select.disabled = true;
+      errEl.style.display = 'none';
+      try {
+        await assignRepoStorage(repo.id, newDestId);
+        repo.storage_destination_id = newDestId;
+        repo.migration_status = 'running';
+        renderStorage();
+      } catch (e: unknown) {
+        errEl.textContent = e instanceof Error ? e.message : String(e);
+        errEl.style.display = 'block';
+        select.disabled = false;
+      }
+    });
+  };
+  renderStorage();
+
   const editWrap = document.createElement('div');
   wrap.appendChild(editWrap);
 
@@ -71,7 +135,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
       const fresh = repos.find(r => r.id === repo.id);
       if (fresh) Object.assign(repo, fresh);
       editWrap.innerHTML = '';
-      render(wrap, repo, accessList, users);
+      render(wrap, repo, accessList, users, destinations);
     }, () => { editWrap.innerHTML = ''; }));
   });
 

@@ -1,6 +1,7 @@
 import {
-  getStorageSettings, updateStorageSettings, getStorageUsage, triggerStorageMigration,
-  type StorageSettings, type StorageUsage,
+  listStorageDestinations, createStorageDestination, updateStorageDestination, deleteStorageDestination,
+  getStorageUsage,
+  type StorageDestination, type StorageDestinationInput, type StorageUsage,
 } from '../api';
 
 function formatBytes(n: number): string {
@@ -26,15 +27,37 @@ export async function storageSettingsView(): Promise<HTMLElement> {
 
   const hint = document.createElement('p');
   hint.style.cssText = 'margin:0 0 24px;color:#64748b;font-size:0.875rem';
-  hint.textContent = 'Render blobs and media assets can be stored locally or on S3-compatible object storage. Changes apply immediately.';
+  hint.textContent = 'Render blobs and media assets are stored locally by default. Add S3-compatible destinations and assign individual repos to them from each repo’s detail page.';
   wrap.appendChild(hint);
 
   const usageWrap = document.createElement('div');
   usageWrap.style.cssText = 'background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:24px;font-size:0.875rem';
   wrap.appendChild(usageWrap);
 
+  const destTitle = document.createElement('h3');
+  destTitle.style.cssText = 'font-size:1rem;margin:0 0 12px';
+  destTitle.textContent = 'Destinations';
+  wrap.appendChild(destTitle);
+
+  const listWrap = document.createElement('div');
+  wrap.appendChild(listWrap);
+
   const formWrap = document.createElement('div');
   wrap.appendChild(formWrap);
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Add destination';
+  addBtn.style.cssText = 'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem;margin-top:8px';
+  addBtn.addEventListener('click', () => {
+    formWrap.innerHTML = '';
+    formWrap.appendChild(buildDestinationForm(null, async (input) => {
+      await createStorageDestination(input);
+      formWrap.innerHTML = '';
+      await reloadDestinations();
+      await reloadUsage();
+    }, () => { formWrap.innerHTML = ''; }));
+  });
+  wrap.appendChild(addBtn);
 
   async function reloadUsage(): Promise<void> {
     let usage: StorageUsage;
@@ -44,61 +67,127 @@ export async function storageSettingsView(): Promise<HTMLElement> {
       usageWrap.innerHTML = `<p style="color:#c00;margin:0">${e instanceof Error ? e.message : String(e)}</p>`;
       return;
     }
-    const localTotal = usage.local_repos_bytes + usage.local_renders_bytes + usage.local_assets_bytes;
-    const s3Total = usage.s3_renders_bytes + usage.s3_assets_bytes;
+    const localTotal = usage.local.repos_bytes + usage.local.renders_bytes + usage.local.assets_bytes;
+    const destLines = usage.destinations.map((d) => {
+      if (d.error) {
+        return `<div><strong>${esc(d.name)}:</strong> <span style="color:#c00">unavailable — ${esc(d.error)}</span></div>`;
+      }
+      return `<div><strong>${esc(d.name)}:</strong> ${formatBytes(d.renders_bytes)} renders, ${formatBytes(d.assets_bytes)} assets</div>`;
+    }).join('');
     usageWrap.innerHTML = `
-      <strong>Local:</strong> ${formatBytes(localTotal)}
-      (repos: ${formatBytes(usage.local_repos_bytes)},
-       renders: ${formatBytes(usage.local_renders_bytes)},
-       assets: ${formatBytes(usage.local_assets_bytes)})
-      &nbsp;·&nbsp;
-      <strong>S3:</strong> ${formatBytes(s3Total)}
-      &nbsp;·&nbsp;
-      <strong>Free disk:</strong> ${formatBytes(usage.local_free_bytes)}
+      <div><strong>Local:</strong> ${formatBytes(localTotal)}
+        (repos: ${formatBytes(usage.local.repos_bytes)},
+         renders: ${formatBytes(usage.local.renders_bytes)},
+         assets: ${formatBytes(usage.local.assets_bytes)})
+        &nbsp;·&nbsp; <strong>Free disk:</strong> ${formatBytes(usage.local.free_bytes)}
+      </div>
+      ${destLines}
     `;
   }
 
-  async function renderForm(): Promise<void> {
-    let settings: StorageSettings;
+  async function reloadDestinations(): Promise<void> {
+    let dests: StorageDestination[];
     try {
-      settings = await getStorageSettings();
+      dests = await listStorageDestinations();
     } catch (e: unknown) {
-      formWrap.innerHTML = `<p style="color:#c00">${e instanceof Error ? e.message : String(e)}</p>`;
+      listWrap.innerHTML = `<p style="color:#c00">${e instanceof Error ? e.message : String(e)}</p>`;
       return;
     }
-    formWrap.innerHTML = '';
-    formWrap.appendChild(buildForm(settings, async () => {
-      await reloadUsage();
-      await renderForm();
-    }));
+    renderDestinations(listWrap, dests);
+  }
+
+  function renderDestinations(container: HTMLElement, dests: StorageDestination[]): void {
+    container.innerHTML = '';
+
+    if (dests.length === 0) {
+      const p = document.createElement('p');
+      p.style.cssText = 'color:#64748b;font-style:italic;margin:0 0 16px';
+      p.textContent = 'No destinations — all repos store locally.';
+      container.appendChild(p);
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.style.marginBottom = '16px';
+    table.innerHTML = `<thead><tr><th>Name</th><th>Bucket</th><th></th></tr></thead>`;
+    const tbody = document.createElement('tbody');
+
+    for (const dest of dests) {
+      const row = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      nameCell.textContent = dest.name;
+      const bucketCell = document.createElement('td');
+      bucketCell.style.fontFamily = 'monospace';
+      bucketCell.textContent = dest.s3_bucket;
+
+      const actionCell = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.textContent = 'Edit';
+      editBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#5B6B8E;text-decoration:underline;font-size:0.8rem;padding:0;margin-right:12px';
+      editBtn.addEventListener('click', () => {
+        formWrap.innerHTML = '';
+        formWrap.appendChild(buildDestinationForm(dest, async (input) => {
+          await updateStorageDestination(dest.id, input);
+          formWrap.innerHTML = '';
+          await reloadDestinations();
+          await reloadUsage();
+        }, () => { formWrap.innerHTML = ''; }));
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#dc2626;text-decoration:underline;font-size:0.8rem;padding:0';
+      const delErr = document.createElement('span');
+      delErr.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin-left:8px';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`Delete destination "${dest.name}"?`)) return;
+        delErr.style.display = 'none';
+        delBtn.disabled = true;
+        try {
+          await deleteStorageDestination(dest.id);
+          await reloadDestinations();
+          await reloadUsage();
+        } catch (e: unknown) {
+          delErr.textContent = e instanceof Error ? e.message : String(e);
+          delErr.style.display = 'inline';
+          delBtn.disabled = false;
+        }
+      });
+
+      actionCell.appendChild(editBtn);
+      actionCell.appendChild(delBtn);
+      actionCell.appendChild(delErr);
+
+      row.appendChild(nameCell);
+      row.appendChild(bucketCell);
+      row.appendChild(actionCell);
+      tbody.appendChild(row);
+    }
+
+    table.appendChild(tbody);
+    container.appendChild(table);
   }
 
   await reloadUsage();
-  await renderForm();
+  await reloadDestinations();
   return wrap;
 }
 
-function buildForm(settings: StorageSettings, onSaved: () => Promise<void>): HTMLElement {
+function buildDestinationForm(
+  dest: StorageDestination | null,
+  onSave: (input: StorageDestinationInput) => Promise<void>,
+  onCancel: () => void,
+): HTMLElement {
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px';
+  wrap.style.cssText = 'background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-top:8px';
 
-  const typeLabel = document.createElement('label');
-  typeLabel.style.cssText = 'display:block;font-size:0.8rem;font-weight:500;margin-bottom:4px';
-  typeLabel.textContent = 'Backend';
-  const typeSelect = document.createElement('select');
-  typeSelect.style.cssText = 'padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.875rem;margin-bottom:16px';
-  for (const opt of ['local', 's3'] as const) {
-    const o = document.createElement('option');
-    o.value = opt;
-    o.textContent = opt === 's3' ? 'S3-compatible' : 'Local disk';
-    o.selected = settings.store_type === opt;
-    typeSelect.appendChild(o);
-  }
-  typeLabel.appendChild(typeSelect);
-  wrap.appendChild(typeLabel);
+  const heading = document.createElement('h4');
+  heading.style.cssText = 'margin:0 0 12px;font-size:0.875rem;font-weight:600';
+  heading.textContent = dest ? 'Edit destination' : 'Add destination';
+  wrap.appendChild(heading);
 
-  const s3Fields = document.createElement('div');
-  s3Fields.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-bottom:16px';
+  const fields = document.createElement('div');
+  fields.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-bottom:16px';
 
   const makeField = (labelText: string, value: string, placeholder = ''): HTMLInputElement => {
     const label = document.createElement('label');
@@ -110,48 +199,46 @@ function buildForm(settings: StorageSettings, onSaved: () => Promise<void>): HTM
     input.placeholder = placeholder;
     input.style.cssText = 'display:block;width:100%;margin-top:4px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.875rem;box-sizing:border-box';
     label.appendChild(input);
-    s3Fields.appendChild(label);
+    fields.appendChild(label);
     return input;
   };
 
-  const endpointInput = makeField('Endpoint', settings.s3_endpoint, 's3.amazonaws.com');
-  const bucketInput = makeField('Bucket', settings.s3_bucket);
-  const accessKeyInput = makeField('Access key', settings.s3_access_key);
-  const secretKeyInput = makeField('Secret key', '', 'leave blank to keep existing');
+  const nameInput = makeField('Name', dest?.name ?? '');
+  const endpointInput = makeField('Endpoint', dest?.s3_endpoint ?? '', 's3.amazonaws.com');
+  const bucketInput = makeField('Bucket', dest?.s3_bucket ?? '');
+  const accessKeyInput = makeField('Access key', dest?.s3_access_key ?? '');
+  const secretKeyInput = makeField('Secret key', '', dest ? 'leave blank to keep existing' : '');
   secretKeyInput.type = 'password';
-  const regionInput = makeField('Region', settings.s3_region, 'us-east-1');
+  const regionInput = makeField('Region', dest?.s3_region ?? '', 'us-east-1');
 
   const sslLabel = document.createElement('label');
   sslLabel.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:0.8rem';
   const sslCheckbox = document.createElement('input');
   sslCheckbox.type = 'checkbox';
-  sslCheckbox.checked = settings.s3_use_ssl;
+  sslCheckbox.checked = dest?.s3_use_ssl ?? true;
   sslLabel.appendChild(sslCheckbox);
   sslLabel.appendChild(document.createTextNode('Use SSL'));
-  s3Fields.appendChild(sslLabel);
+  fields.appendChild(sslLabel);
 
-  wrap.appendChild(s3Fields);
-
-  const updateVisibility = (): void => {
-    s3Fields.style.display = typeSelect.value === 's3' ? 'flex' : 'none';
-  };
-  updateVisibility();
-  typeSelect.addEventListener('change', updateVisibility);
+  wrap.appendChild(fields);
 
   const errSpan = document.createElement('p');
   errSpan.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin:0 0 12px';
   wrap.appendChild(errSpan);
 
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+
   const saveBtn = document.createElement('button');
   saveBtn.textContent = 'Save';
-  saveBtn.style.cssText = 'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem;margin-right:8px';
+  saveBtn.style.cssText = 'padding:8px 16px;background:#5B6B8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem';
   saveBtn.addEventListener('click', async () => {
     errSpan.style.display = 'none';
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
     try {
-      await updateStorageSettings({
-        store_type: typeSelect.value as 'local' | 's3',
+      await onSave({
+        name: nameInput.value.trim(),
         s3_endpoint: endpointInput.value.trim(),
         s3_bucket: bucketInput.value.trim(),
         s3_access_key: accessKeyInput.value.trim(),
@@ -159,9 +246,6 @@ function buildForm(settings: StorageSettings, onSaved: () => Promise<void>): HTM
         s3_region: regionInput.value.trim(),
         s3_use_ssl: sslCheckbox.checked,
       });
-      // Applies live (Swap() on the backend, Task 7) — no restart, no
-      // downtime, so we can reload the form/usage immediately.
-      await onSaved();
     } catch (e: unknown) {
       errSpan.textContent = e instanceof Error ? e.message : String(e);
       errSpan.style.display = 'block';
@@ -169,30 +253,19 @@ function buildForm(settings: StorageSettings, onSaved: () => Promise<void>): HTM
       saveBtn.textContent = 'Save';
     }
   });
-  wrap.appendChild(saveBtn);
 
-  if (settings.store_type === 's3') {
-    const migrateBtn = document.createElement('button');
-    migrateBtn.textContent = settings.migration_status === 'running'
-      ? `Migrating… (${settings.migration_done}/${settings.migration_total})`
-      : 'Migrate existing local data to S3';
-    migrateBtn.disabled = settings.migration_status === 'running';
-    migrateBtn.style.cssText = 'padding:8px 16px;background:#4BB585;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem';
-    migrateBtn.addEventListener('click', async () => {
-      migrateBtn.disabled = true;
-      migrateBtn.textContent = 'Starting…';
-      try {
-        await triggerStorageMigration();
-        await onSaved();
-      } catch (e: unknown) {
-        errSpan.textContent = e instanceof Error ? e.message : String(e);
-        errSpan.style.display = 'block';
-        migrateBtn.disabled = false;
-        migrateBtn.textContent = 'Migrate existing local data to S3';
-      }
-    });
-    wrap.appendChild(migrateBtn);
-  }
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'padding:8px 16px;background:#e2e8f0;border:none;border-radius:6px;cursor:pointer;font-size:0.875rem';
+  cancelBtn.addEventListener('click', onCancel);
+
+  btnRow.appendChild(saveBtn);
+  btnRow.appendChild(cancelBtn);
+  wrap.appendChild(btnRow);
 
   return wrap;
+}
+
+function esc(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

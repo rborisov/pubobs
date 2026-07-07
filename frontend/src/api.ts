@@ -6,6 +6,8 @@ export interface Repo {
   is_cloned: boolean;
   role: string; // "admin" | "editor" | "commentator" | "reader"
   allow_guest: boolean;
+  storage_destination_id: string | null;
+  migration_status: string; // "idle" | "running" | "done" | "failed"
 }
 
 export interface RepoAccess {
@@ -359,47 +361,62 @@ export async function addComment(repoId: string, notePath: string, body: string,
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
-export interface StorageSettings {
-  store_type: 'local' | 's3';
+export interface StorageDestination {
+  id: string;
+  name: string;
   s3_endpoint: string;
   s3_bucket: string;
   s3_access_key: string;
   s3_region: string;
   s3_use_ssl: boolean;
-  migration_status: 'idle' | 'running' | 'done' | 'failed';
-  migration_total: number;
-  migration_done: number;
 }
 
-export interface StorageSettingsUpdate {
-  store_type: 'local' | 's3';
+export interface StorageDestinationInput {
+  name: string;
   s3_endpoint: string;
   s3_bucket: string;
   s3_access_key: string;
-  s3_secret_key: string; // blank string means "keep existing" server-side
+  s3_secret_key: string; // blank on edit = keep existing
   s3_region: string;
   s3_use_ssl: boolean;
 }
 
 export interface StorageUsage {
-  local_free_bytes: number;
-  local_repos_bytes: number;
-  local_renders_bytes: number;
-  local_assets_bytes: number;
-  s3_renders_bytes: number;
-  s3_assets_bytes: number;
+  local: { free_bytes: number; repos_bytes: number; renders_bytes: number; assets_bytes: number };
+  destinations: { id: string; name: string; renders_bytes: number; assets_bytes: number; error?: string }[];
 }
 
-export async function getStorageSettings(): Promise<StorageSettings> {
-  return json<StorageSettings>(await authedFetch('/api/admin/storage-settings'));
+export async function listStorageDestinations(): Promise<StorageDestination[]> {
+  return json<StorageDestination[]>(await authedFetch('/api/admin/storage-destinations'));
 }
 
-export async function updateStorageSettings(patch: StorageSettingsUpdate): Promise<void> {
-  const resp = await authedFetch('/api/admin/storage-settings', {
+export async function createStorageDestination(input: StorageDestinationInput): Promise<StorageDestination> {
+  const resp = await authedFetch('/api/admin/storage-destinations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
+  }
+  return resp.json() as Promise<StorageDestination>;
+}
+
+export async function updateStorageDestination(id: string, input: StorageDestinationInput): Promise<void> {
+  const resp = await authedFetch(`/api/admin/storage-destinations/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
+    body: JSON.stringify(input),
   });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
+  }
+}
+
+export async function deleteStorageDestination(id: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/storage-destinations/${id}`, { method: 'DELETE' });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
     throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
@@ -410,8 +427,12 @@ export async function getStorageUsage(): Promise<StorageUsage> {
   return json<StorageUsage>(await authedFetch('/api/admin/storage-usage'));
 }
 
-export async function triggerStorageMigration(): Promise<void> {
-  const resp = await authedFetch('/api/admin/storage-migrate', { method: 'POST' });
+export async function assignRepoStorage(repoId: string, destinationId: string | null): Promise<void> {
+  const resp = await authedFetch(`/api/admin/repos/${repoId}/storage`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ storage_destination_id: destinationId }),
+  });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
     throw new Error((err as { error?: string }).error ?? `HTTP ${resp.status}`);
