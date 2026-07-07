@@ -89,6 +89,26 @@ func (s *LocalRenderStore) WalkEntries(fn func(repoID, notePath string) error) e
 	return nil
 }
 
+// WalkRepoEntries calls fn for every notePath stored under repoID, derived
+// from the on-disk <baseDir>/<repoID>/<notePath>.enc layout. A missing repo
+// directory yields no entries and no error.
+func (s *LocalRenderStore) WalkRepoEntries(repoID string, fn func(notePath string) error) error {
+	repoDir := filepath.Join(s.baseDir, repoID)
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		return nil
+	}
+	return filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(repoDir, path)
+		if rerr != nil {
+			return nil
+		}
+		return fn(strings.TrimSuffix(rel, ".enc"))
+	})
+}
+
 func (s *LocalRenderStore) filePath(repoID, notePath string) (string, error) {
 	p := filepath.Join(s.baseDir, repoID, notePath+".enc")
 	// Ensure the resolved path stays within baseDir

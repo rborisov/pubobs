@@ -86,6 +86,24 @@ func (s *S3RenderStore) ListAllObjects() ([]minio.ObjectInfo, error) {
 	return all, nil
 }
 
+// WalkRepoEntries calls fn for every notePath stored under repoID in this
+// store's namespace, by listing objects under the <keyPrefix><repoID>/
+// prefix and stripping the prefix and the .enc suffix.
+func (s *S3RenderStore) WalkRepoEntries(repoID string, fn func(notePath string) error) error {
+	prefix := s.keyPrefix + repoID + "/"
+	ctx := context.Background()
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		notePath := strings.TrimSuffix(strings.TrimPrefix(obj.Key, prefix), ".enc")
+		if err := fn(notePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SumObjectSizesWithPrefix sums the sizes of objects whose key starts with
 // prefix — a small pure function so the filtering logic is unit-testable
 // without a live S3 endpoint.
