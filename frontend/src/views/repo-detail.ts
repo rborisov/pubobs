@@ -161,8 +161,8 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
   const editWrap = document.createElement('div');
   wrap.appendChild(editWrap);
 
-  editBtn.addEventListener('click', () => {
-    if (editWrap.firstChild) { editWrap.innerHTML = ''; return; }
+  const openEditForm = (): void => {
+    editWrap.innerHTML = '';
     editWrap.appendChild(repoEditForm(repo, async (data) => {
       await updateRepo(repo.id, data);
       const repos = await listRepos();
@@ -171,7 +171,16 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
       editWrap.innerHTML = '';
       render(wrap, repo, accessList, users, destinations);
     }, () => { editWrap.innerHTML = ''; }));
+  };
+
+  editBtn.addEventListener('click', () => {
+    if (editWrap.firstChild) { editWrap.innerHTML = ''; return; }
+    openEditForm();
   });
+
+  // This page is reached via the repos list's "Edit" link, so surface the
+  // connection-settings form immediately alongside storage and access below.
+  openEditForm();
 
   delBtn.addEventListener('click', async () => {
     if (!confirm(`Delete repo "${repo.name}"? This cannot be undone.`)) return;

@@ -22,7 +22,7 @@ register('/allowlist', () => allowlistView());
 register('/storage', () => storageSettingsView());
 register('/dashboard', () => dashboardView(currentUser!));
 register('/groups', () => groupsView(currentUser!));
-register('/read/:repoId', ({ repoId }) => readerListView(repoId));
+register('/read/:repoId', ({ repoId }) => readerListView(repoId, currentUser));
 register('/read/:repoId/*', params => readerNoteView(params['repoId'], params['*'] ?? ''));
 register('/', () => {
   navigate(isAuthenticated()

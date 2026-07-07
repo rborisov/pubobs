@@ -1,4 +1,4 @@
-import { pubListNotes, type PubNote, type PubRepo } from '../api';
+import { pubListNotes, type PubNote, type PubRepo, type Me } from '../api';
 import { ensureReaderStyles } from '../reader-styles';
 
 interface ViewState {
@@ -272,7 +272,7 @@ function renderNoteList(
   }
 }
 
-export async function readerListView(repoId: string): Promise<HTMLElement> {
+export async function readerListView(repoId: string, me: Me | null): Promise<HTMLElement> {
   ensureReaderStyles();
 
   const wrap = document.createElement('div');
@@ -291,11 +291,14 @@ export async function readerListView(repoId: string): Promise<HTMLElement> {
   const allTags = collectTags(notes);
   const folderTree = buildFolderTree(notes);
 
-  // Header
+  // Header — admins land here from the repos list, everyone else from their dashboard
+  const isAdmin = me?.is_instance_admin || me?.is_admin;
+  const backHref = isAdmin ? '#/repos' : '#/dashboard';
+  const backLabel = isAdmin ? '← Repos' : '← My repos';
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;align-items:baseline;gap:16px;margin-bottom:28px';
   header.innerHTML = `
-    <a href="#/dashboard" style="font-size:0.875rem;text-decoration:none" class="r-muted">← My repos</a>
+    <a href="${backHref}" style="font-size:0.875rem;text-decoration:none" class="r-muted">${backLabel}</a>
     <h1 style="margin:0;font-size:1.5rem;font-weight:700">${esc(repo.name)}</h1>
   `;
   wrap.appendChild(header);

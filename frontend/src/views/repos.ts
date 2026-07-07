@@ -1,4 +1,4 @@
-import { listRepos, createRepo, updateRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo, type Me } from '../api';
+import { listRepos, createRepo, deleteRepo, importRepo, setRepoGuestAccess, type Repo, type Me } from '../api';
 
 export async function reposView(me: Me): Promise<HTMLElement> {
   const wrap = document.createElement('div');
@@ -78,7 +78,8 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
 
     const nameCell = document.createElement('td');
     const link = document.createElement('a');
-    link.href = `#/repos/${repo.id}`;
+    link.href = `#/read/${repo.id}`;
+    link.title = 'Browse this repo\u2019s pages';
     link.style.fontWeight = '500';
     link.textContent = repo.name;
     nameCell.appendChild(link);
@@ -122,34 +123,17 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
     actionsCell.style.whiteSpace = 'nowrap';
 
     if (canManage) {
-      const editBtn = mkBtn('Edit', 'link');
-      editBtn.style.marginRight = '8px';
+      const editLink = document.createElement('a');
+      editLink.href = `#/repos/${repo.id}`;
+      editLink.textContent = 'Edit';
+      editLink.title = 'Repository, storage, and access settings';
+      editLink.style.cssText = 'color:#5B6B8E;text-decoration:underline;font-size:0.8rem;margin-right:8px';
       const importBtn = mkBtn('Import', 'link');
       importBtn.style.marginRight = '8px';
       const delBtn = mkBtn('Delete', 'link-danger');
-      actionsCell.appendChild(editBtn);
+      actionsCell.appendChild(editLink);
       actionsCell.appendChild(importBtn);
       actionsCell.appendChild(delBtn);
-
-      editBtn.addEventListener('click', () => {
-        const existing = tbody.querySelector('tr.inline-form');
-        if (existing) existing.remove();
-        if (row.nextSibling && (row.nextSibling as HTMLElement).classList?.contains('inline-form')) return;
-        const formRow = document.createElement('tr');
-        formRow.className = 'inline-form';
-        const formCell = document.createElement('td');
-        formCell.colSpan = 6;
-        formCell.style.padding = '0';
-        formCell.appendChild(
-          repoForm(repo, async data => {
-            await updateRepo(repo.id, data);
-            const fresh = await listRepos();
-            renderTable(container, fresh, me);
-          }, () => { formRow.remove(); })
-        );
-        formRow.appendChild(formCell);
-        row.after(formRow);
-      });
 
       importBtn.addEventListener('click', async () => {
         importBtn.textContent = 'Importing…';
