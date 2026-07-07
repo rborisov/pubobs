@@ -115,6 +115,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
         repo.storage_destination_id = newDestId;
         repo.migration_status = 'running';
         renderStorage();
+        void pollMigration();
       } catch (e: unknown) {
         errEl.textContent = e instanceof Error ? e.message : String(e);
         errEl.style.display = 'block';
@@ -122,7 +123,40 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
       }
     });
   };
+
+  let migrationPolling = false;
+  const pollMigration = async (): Promise<void> => {
+    if (migrationPolling) return;
+    migrationPolling = true;
+    try {
+      // Per-repo migrations finish in seconds; poll briefly until the repo
+      // leaves "running", then re-render so the "Migrating…" message clears
+      // itself without a manual page reload. Stops if the view navigates away
+      // (storageSection detached) or after a ~60s safety cap.
+      for (let i = 0; i < 40; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        if (!storageSection.isConnected) return;
+        let latest: Repo | undefined;
+        try {
+          latest = (await listRepos()).find((r) => r.id === repo.id);
+        } catch {
+          continue; // transient error — keep polling
+        }
+        if (!latest) return;
+        if (latest.migration_status !== 'running') {
+          repo.migration_status = latest.migration_status;
+          repo.storage_destination_id = latest.storage_destination_id;
+          renderStorage();
+          return;
+        }
+      }
+    } finally {
+      migrationPolling = false;
+    }
+  };
+
   renderStorage();
+  if (repo.migration_status === 'running') void pollMigration();
 
   const editWrap = document.createElement('div');
   wrap.appendChild(editWrap);
