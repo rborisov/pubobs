@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS storage_settings (
     updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS storage_destinations (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    s3_endpoint   TEXT NOT NULL DEFAULT '',
+    s3_bucket     TEXT NOT NULL DEFAULT '',
+    s3_access_key TEXT NOT NULL DEFAULT '',
+    s3_secret_key TEXT NOT NULL DEFAULT '',
+    s3_region     TEXT NOT NULL DEFAULT '',
+    s3_use_ssl    INTEGER NOT NULL DEFAULT 1,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS registration_allowlist (
     id         TEXT PRIMARY KEY,
     pattern    TEXT UNIQUE NOT NULL, -- exact email or @domain.com suffix

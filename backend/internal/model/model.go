@@ -114,6 +114,18 @@ type StorageSettings struct {
 	UpdatedAt          time.Time
 }
 
+type StorageDestination struct {
+	ID          string
+	Name        string
+	S3Endpoint  string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Region    string
+	S3UseSSL    bool
+	CreatedAt   time.Time
+}
+
 // Commit is a git log entry returned by the history API.
 type Commit struct {
 	SHA         string    `json:"sha"`
