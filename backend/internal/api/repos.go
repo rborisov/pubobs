@@ -22,13 +22,15 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			return
 		}
 		type repoResp struct {
-			ID            string `json:"id"`
-			Name          string `json:"name"`
-			RemoteURL     string `json:"remote_url"`
-			DefaultBranch string `json:"default_branch"`
-			IsCloned      bool   `json:"is_cloned"`
-			Role          string `json:"role"`
-			AllowGuest    bool   `json:"allow_guest"`
+			ID                   string  `json:"id"`
+			Name                 string  `json:"name"`
+			RemoteURL            string  `json:"remote_url"`
+			DefaultBranch        string  `json:"default_branch"`
+			IsCloned             bool    `json:"is_cloned"`
+			Role                 string  `json:"role"`
+			AllowGuest           bool    `json:"allow_guest"`
+			StorageDestinationID *string `json:"storage_destination_id"`
+			MigrationStatus      string  `json:"migration_status"`
 		}
 		out := make([]repoResp, len(repos))
 		for i, repo := range repos {
@@ -40,6 +42,7 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 				ID: repo.ID, Name: repo.Name, RemoteURL: repo.RemoteURL,
 				DefaultBranch: repo.DefaultBranch, IsCloned: repo.LocalPath != nil,
 				Role: role, AllowGuest: repo.AllowGuest,
+				StorageDestinationID: repo.StorageDestinationID, MigrationStatus: repo.MigrationStatus,
 			}
 		}
 		writeJSON(w, http.StatusOK, out)

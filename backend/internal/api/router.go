@@ -95,6 +95,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Post("/api/admin/storage-destinations", handleAdminCreateDestination(deps))
 		r.Put("/api/admin/storage-destinations/{id}", handleAdminUpdateDestination(deps))
 		r.Delete("/api/admin/storage-destinations/{id}", handleAdminDeleteDestination(deps))
+		r.Put("/api/admin/repos/{id}/storage", handleAdminAssignRepoStorage(deps))
 	})
 
 	// Public reader (no auth)
