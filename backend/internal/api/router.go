@@ -91,6 +91,10 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Get("/api/admin/groups/{id}/members", handleAdminListGroupMembers(deps))
 		r.Delete("/api/admin/groups/{id}/members/{userID}", handleAdminRemoveGroupMember(deps))
 		r.Put("/api/admin/groups/{id}/members/{userID}/role", handleAdminSetGroupMemberRole(deps))
+		r.Get("/api/admin/storage-destinations", handleAdminListDestinations(deps))
+		r.Post("/api/admin/storage-destinations", handleAdminCreateDestination(deps))
+		r.Put("/api/admin/storage-destinations/{id}", handleAdminUpdateDestination(deps))
+		r.Delete("/api/admin/storage-destinations/{id}", handleAdminDeleteDestination(deps))
 	})
 
 	// Public reader (no auth)
