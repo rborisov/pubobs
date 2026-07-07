@@ -14,7 +14,6 @@ import (
 
 	"github.com/pubobs/backend/internal/api"
 	"github.com/pubobs/backend/internal/gitcache"
-	"github.com/pubobs/backend/internal/renderstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +48,7 @@ func newTestDepsWithCache(t *testing.T) *api.Deps {
 	t.Helper()
 	deps := newTestDeps(t)
 	deps.Cache = gitcache.NewCache(t.TempDir())
-	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
+	deps.Resolver = newTestResolver(t, deps)
 	return deps
 }
 
@@ -118,7 +117,6 @@ func TestHandleSync_writesAssetsToAssetStore(t *testing.T) {
 	seedBareRepo(t, bareURL)
 
 	deps := newTestDepsWithCache(t)
-	deps.AssetStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
 	ctx := context.Background()
 
 	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
@@ -134,7 +132,9 @@ func TestHandleSync_writesAssetsToAssetStore(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
-	data, err := deps.AssetStore.Read("r1", "img.png")
+	astore, err := deps.Resolver.AssetStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	data, err := astore.Read("r1", "img.png")
 	require.NoError(t, err)
 	require.Equal(t, []byte("pngbytes"), data)
 }

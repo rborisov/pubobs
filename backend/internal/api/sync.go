@@ -111,22 +111,34 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			deps.Store.UpsertSnapshot(r.Context(), note.ID, "", string(metaJSON), claims.UserID, sha)
 			deps.Store.UpsertNoteLinks(r.Context(), note.ID, meta.Links)
 			if encBytes, err := base64.StdEncoding.DecodeString(f.EncryptedHTML); err == nil && len(encBytes) > 0 {
-				if werr := deps.RenderStore.Write(repoID, f.Path, encBytes); werr != nil {
-					fmt.Printf("renderstore write %s/%s: %v\n", repoID, f.Path, werr)
+				if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
+					if werr := rstore.Write(repoID, f.Path, encBytes); werr != nil {
+						fmt.Printf("renderstore write %s/%s: %v\n", repoID, f.Path, werr)
+					}
+				} else {
+					fmt.Printf("resolve render store %s: %v\n", repoID, rerr)
 				}
 			}
 		}
 
 		for _, a := range cacheAssets {
-			if werr := deps.AssetStore.Write(repoID, a.Path, a.Content); werr != nil {
-				fmt.Printf("assetstore write %s/%s: %v\n", repoID, a.Path, werr)
+			if astore, aerr := deps.Resolver.AssetStoreFor(r.Context(), repoID); aerr == nil {
+				if werr := astore.Write(repoID, a.Path, a.Content); werr != nil {
+					fmt.Printf("assetstore write %s/%s: %v\n", repoID, a.Path, werr)
+				}
+			} else {
+				fmt.Printf("resolve asset store %s: %v\n", repoID, aerr)
 			}
 		}
 
 		for _, p := range payload.DeletedPaths {
 			deps.Store.DeleteNote(r.Context(), repoID, p)
-			if derr := deps.RenderStore.Delete(repoID, p); derr != nil {
-				fmt.Printf("renderstore delete %s/%s: %v\n", repoID, p, derr)
+			if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
+				if derr := rstore.Delete(repoID, p); derr != nil {
+					fmt.Printf("renderstore delete %s/%s: %v\n", repoID, p, derr)
+				}
+			} else {
+				fmt.Printf("resolve render store %s: %v\n", repoID, rerr)
 			}
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)

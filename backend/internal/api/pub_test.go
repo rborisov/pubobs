@@ -10,17 +10,30 @@ import (
 
 	"github.com/pubobs/backend/internal/api"
 	"github.com/pubobs/backend/internal/gitcache"
-	"github.com/pubobs/backend/internal/renderstore"
+	"github.com/pubobs/backend/internal/storageresolver"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestResolver builds a StorageResolver backed by throwaway local dirs.
+// Repos default to local storage (StorageDestinationID nil), so
+// RenderStoreFor/AssetStoreFor resolve to these local stores.
+func newTestResolver(t *testing.T, deps *api.Deps) *storageresolver.Resolver {
+	t.Helper()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	r, err := storageresolver.New(deps.Store, t.TempDir(), t.TempDir(), key)
+	require.NoError(t, err)
+	return r
+}
 
 func newTestDepsForPub(t *testing.T) (deps *api.Deps, cacheDir string) {
 	t.Helper()
 	deps = newTestDeps(t)
 	cacheDir = t.TempDir()
 	deps.Cache = gitcache.NewCache(cacheDir)
-	deps.RenderStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
-	deps.AssetStore = renderstore.NewSwappableStore(renderstore.NewLocal(t.TempDir()))
+	deps.Resolver = newTestResolver(t, deps)
 	return deps, cacheDir
 }
 
@@ -30,7 +43,9 @@ func TestHandlePubGetAsset_servesFromAssetStoreWhenPresent(t *testing.T) {
 	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
 	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
 
-	require.NoError(t, deps.AssetStore.Write("r1", "img.png", []byte("from-asset-store")))
+	astore, err := deps.Resolver.AssetStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, astore.Write("r1", "img.png", []byte("from-asset-store")))
 
 	req := httptest.NewRequest("GET", "/pub/r1/assets/img.png", nil)
 	rr := httptest.NewRecorder()
@@ -60,7 +75,9 @@ func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {
 	require.Equal(t, []byte("from-git-checkout"), rr.Body.Bytes())
 
 	// Backfilled: the next read no longer needs the checkout.
-	backfilled, err := deps.AssetStore.Read("r1", "legacy.png")
+	astore, err := deps.Resolver.AssetStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	backfilled, err := astore.Read("r1", "legacy.png")
 	require.NoError(t, err)
 	require.Equal(t, []byte("from-git-checkout"), backfilled)
 }

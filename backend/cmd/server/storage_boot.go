@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/pubobs/backend/internal/config"
 	"github.com/pubobs/backend/internal/model"
 	"github.com/pubobs/backend/internal/store"
@@ -46,4 +47,46 @@ func loadOrSeedStorageSettings(ctx context.Context, s *store.Store, cfg *config.
 		return nil, err
 	}
 	return seeded, nil
+}
+
+// convertLegacyStorageSettings performs a one-time upgrade: if the prior
+// instance-wide storage_settings row was configured for S3 and no
+// destinations exist yet, create a "default" destination from it and assign
+// every existing repo to it, so their already-uploaded renders/assets keep
+// resolving to the same bucket. Idempotent: a no-op once any destination
+// exists, or when the legacy settings were local.
+func convertLegacyStorageSettings(ctx context.Context, s *store.Store, legacy *model.StorageSettings) error {
+	if legacy.StoreType != "s3" {
+		return nil
+	}
+	existing, err := s.ListStorageDestinations(ctx)
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil // conversion already ran (or destinations otherwise exist)
+	}
+	dest := &model.StorageDestination{
+		ID:          uuid.NewString(),
+		Name:        "default",
+		S3Endpoint:  legacy.S3Endpoint,
+		S3Bucket:    legacy.S3Bucket,
+		S3AccessKey: legacy.S3AccessKey,
+		S3SecretKey: legacy.S3SecretKey,
+		S3Region:    legacy.S3Region,
+		S3UseSSL:    legacy.S3UseSSL,
+	}
+	if err := s.CreateStorageDestination(ctx, dest); err != nil {
+		return err
+	}
+	repos, err := s.ListRepos(ctx)
+	if err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		if err := s.SetRepoStorageDestination(ctx, repo.ID, &dest.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

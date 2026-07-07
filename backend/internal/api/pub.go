@@ -243,7 +243,12 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data, err := deps.RenderStore.Read(repoID, notePath)
+		rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve render store failed")
+			return
+		}
+		data, err := rstore.Read(repoID, notePath)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "render read failed")
 			return
@@ -279,7 +284,13 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		data, err := deps.AssetStore.Read(repoID, assetPath)
+		astore, aerr := deps.Resolver.AssetStoreFor(r.Context(), repoID)
+		if aerr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve asset store failed")
+			return
+		}
+
+		data, err := astore.Read(repoID, assetPath)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "asset read failed")
 			return
@@ -293,7 +304,7 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 				writeError(w, http.StatusNotFound, "asset not found")
 				return
 			}
-			if werr := deps.AssetStore.Write(repoID, assetPath, data); werr != nil {
+			if werr := astore.Write(repoID, assetPath, data); werr != nil {
 				fmt.Printf("assetstore backfill %s/%s: %v\n", repoID, assetPath, werr)
 			}
 		}

@@ -17,7 +17,7 @@ import (
 	"github.com/pubobs/backend/internal/db"
 	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/jobs"
-	"github.com/pubobs/backend/internal/renderstore"
+	"github.com/pubobs/backend/internal/storageresolver"
 	"github.com/pubobs/backend/internal/store"
 )
 
@@ -62,38 +62,17 @@ func main() {
 		log.Fatalf("load storage settings: %v", err)
 	}
 
-	rs, err := renderstore.New(
-		storageSettings.StoreType, cfg.RenderDir,
-		storageSettings.S3Endpoint, storageSettings.S3Bucket,
-		storageSettings.S3AccessKey, storageSettings.S3SecretKey,
-		storageSettings.S3Region, storageSettings.S3UseSSL,
-		"renders/",
-	)
-	if err != nil {
-		log.Fatalf("render store: %v", err)
-	}
-
 	assetKeyBytes, err := hex.DecodeString(storageSettings.AssetEncryptionKey)
 	if err != nil || len(assetKeyBytes) != 32 {
 		log.Fatalf("invalid asset encryption key in storage_settings")
 	}
-	assetBase, err := renderstore.New(
-		storageSettings.StoreType, cfg.AssetDir,
-		storageSettings.S3Endpoint, storageSettings.S3Bucket,
-		storageSettings.S3AccessKey, storageSettings.S3SecretKey,
-		storageSettings.S3Region, storageSettings.S3UseSSL,
-		"assets/",
-	)
-	if err != nil {
-		log.Fatalf("asset store: %v", err)
+	if err := convertLegacyStorageSettings(ctx, appStore, storageSettings); err != nil {
+		log.Fatalf("convert legacy storage settings: %v", err)
 	}
-	as, err := renderstore.NewEncryptingStore(assetBase, assetKeyBytes)
+	resolver, err := storageresolver.New(appStore, cfg.RenderDir, cfg.AssetDir, assetKeyBytes)
 	if err != nil {
-		log.Fatalf("encrypting asset store: %v", err)
+		log.Fatalf("storage resolver: %v", err)
 	}
-
-	renderSwap := renderstore.NewSwappableStore(rs)
-	assetSwap := renderstore.NewSwappableStore(as)
 
 	deps := &api.Deps{
 		Store:         appStore,
@@ -101,8 +80,7 @@ func main() {
 		Auth:          auth.NewSessionStore(),
 		OIDCProviders: providers,
 		Config:        cfg,
-		RenderStore:   renderSwap,
-		AssetStore:    assetSwap,
+		Resolver:      resolver,
 	}
 
 	jobs.StartEvictionJob(ctx, deps.Store, deps.Cache, cfg)
