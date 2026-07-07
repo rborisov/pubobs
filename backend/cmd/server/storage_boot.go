@@ -50,11 +50,17 @@ func loadOrSeedStorageSettings(ctx context.Context, s *store.Store, cfg *config.
 }
 
 // convertLegacyStorageSettings performs a one-time upgrade: if the prior
-// instance-wide storage_settings row was configured for S3 and no
-// destinations exist yet, create a "default" destination from it and assign
-// every existing repo to it, so their already-uploaded renders/assets keep
-// resolving to the same bucket. Idempotent: a no-op once any destination
-// exists, or when the legacy settings were local.
+// instance-wide storage_settings row was configured for S3, create a
+// "default" destination from it and assign every existing repo to it, so their
+// already-uploaded renders/assets keep resolving to the same bucket.
+//
+// Idempotency is anchored on a persisted marker rather than the destination
+// count: after a successful conversion the legacy row's StoreType is flipped to
+// "local" and re-persisted, so the `StoreType != "s3"` early-return makes every
+// future boot a no-op. This prevents a silent re-conversion if an admin later
+// reassigns all repos to Local and deletes every destination. The `len > 0`
+// early-return is kept as belt-and-suspenders for a partially-run prior
+// conversion.
 func convertLegacyStorageSettings(ctx context.Context, s *store.Store, legacy *model.StorageSettings) error {
 	if legacy.StoreType != "s3" {
 		return nil
@@ -87,6 +93,12 @@ func convertLegacyStorageSettings(ctx context.Context, s *store.Store, legacy *m
 		if err := s.SetRepoStorageDestination(ctx, repo.ID, &dest.ID); err != nil {
 			return err
 		}
+	}
+	// Persist a "converted" marker so future boots no-op: flipping StoreType to
+	// "local" trips the early-return above on the next reloaded settings row.
+	legacy.StoreType = "local"
+	if err := s.UpsertStorageSettings(ctx, legacy); err != nil {
+		return err
 	}
 	return nil
 }

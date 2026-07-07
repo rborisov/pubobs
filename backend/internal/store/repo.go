@@ -158,6 +158,21 @@ func (s *Store) SetRepoMigrationStatus(ctx context.Context, repoID, status strin
 	return err
 }
 
+// ResetRunningMigrations marks any repo stuck in "running" as "failed" and
+// returns how many rows were affected. A migration goroutine cannot survive a
+// process restart, so any "running" status observed at boot is definitionally
+// stale and would otherwise wedge the repo (new assignments are rejected while
+// running).
+func (s *Store) ResetRunningMigrations(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE repos SET migration_status='failed' WHERE migration_status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 func (s *Store) CountReposUsingDestination(ctx context.Context, destID string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,

@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,16 @@ import (
 
 type assignStorageBody struct {
 	StorageDestinationID *string `json:"storage_destination_id"` // null = local
+}
+
+// sameDestination reports whether two storage-destination pointers refer to the
+// same destination by VALUE: equal when both are nil (local) or both non-nil
+// with equal ids.
+func sameDestination(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func handleAdminAssignRepoStorage(deps *Deps) http.HandlerFunc {
@@ -46,6 +57,15 @@ func handleAdminAssignRepoStorage(deps *Deps) http.HandlerFunc {
 		oldDest := repo.StorageDestinationID
 		newDest := b.StorageDestinationID
 
+		// No-op reassignment: the requested destination equals the current one.
+		// Source and destination stores would alias the SAME objects, so a
+		// migration would copy each key onto itself and then DELETE it — wiping
+		// the repo's renders/assets. Short-circuit before touching anything.
+		if sameDestination(oldDest, newDest) {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "unchanged"})
+			return
+		}
+
 		// Resolve source (old) and dest (new) store pairs BEFORE reassigning,
 		// so the source still points at where the data currently lives.
 		srcRender, srcAssetPlain, ok1 := deps.Resolver.StoresForDestination(oldDest)
@@ -70,12 +90,11 @@ func handleAdminAssignRepoStorage(deps *Deps) http.HandlerFunc {
 			ctx := context.Background()
 			migrated, failed, merr := jobs.RunRepoMigration(ctx, repoID, srcRender, dstRender, srcAssetPlain, dstAssetPlain)
 			status := "done"
-			if merr != nil {
+			if merr != nil || failed > 0 {
 				status = "failed"
 			}
 			if err := deps.Store.SetRepoMigrationStatus(ctx, repoID, status, migrated+failed, migrated); err != nil {
-				// best-effort status write
-				_ = err
+				log.Printf("repo-migration: final status write for %s failed: %v", repoID, err)
 			}
 		}()
 

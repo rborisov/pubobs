@@ -44,6 +44,35 @@ func TestResolver_localWhenNoDestination(t *testing.T) {
 	require.True(t, isEnc, "asset store is always EncryptingStore-wrapped")
 }
 
+// TestResolver_assetStorePlainVsEncrypting guards the highest-stakes invariant
+// of the feature: AssetStoreFor returns an EncryptingStore (so assets are
+// encrypted at rest) while PlainAssetStoreFor returns the un-wrapped base store
+// (so migration copies ciphertext verbatim, never double-encrypting).
+func TestResolver_assetStorePlainVsEncrypting(t *testing.T) {
+	d, err := db.Open(":memory:")
+	require.NoError(t, err)
+	defer d.Close()
+	st := store.New(d)
+	ctx := context.Background()
+	_, err = st.CreateRepo(ctx, "r1", "R1", "https://x/r1.git", "", "main")
+	require.NoError(t, err)
+
+	r, err := storageresolver.New(st, t.TempDir(), t.TempDir(), newKey(t))
+	require.NoError(t, err)
+
+	as, err := r.AssetStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	_, isEnc := as.(*renderstore.EncryptingStore)
+	require.True(t, isEnc, "AssetStoreFor must return an EncryptingStore")
+
+	plain, err := r.PlainAssetStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	_, plainIsEnc := plain.(*renderstore.EncryptingStore)
+	require.False(t, plainIsEnc, "PlainAssetStoreFor must NOT be an EncryptingStore")
+	_, isLocal := plain.(*renderstore.LocalRenderStore)
+	require.True(t, isLocal, "PlainAssetStoreFor for local resolves to LocalRenderStore")
+}
+
 func TestResolver_usesDestinationAfterRebuild(t *testing.T) {
 	d, err := db.Open(":memory:")
 	require.NoError(t, err)

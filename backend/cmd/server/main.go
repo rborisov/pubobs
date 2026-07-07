@@ -57,6 +57,14 @@ func main() {
 
 	appStore := store.New(database)
 
+	// Any repo left in "running" from a previous process is stale (a migration
+	// goroutine cannot outlive its process) — reset it so it isn't wedged.
+	if n, err := appStore.ResetRunningMigrations(ctx); err != nil {
+		log.Fatalf("reset running migrations: %v", err)
+	} else if n > 0 {
+		log.Printf("reset %d stale 'running' migration(s) to 'failed' at boot", n)
+	}
+
 	storageSettings, err := loadOrSeedStorageSettings(ctx, appStore, cfg)
 	if err != nil {
 		log.Fatalf("load storage settings: %v", err)

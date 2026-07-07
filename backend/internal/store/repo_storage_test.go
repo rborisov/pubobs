@@ -53,3 +53,31 @@ func TestRepoStorageDestination_setAndCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, count)
 }
+
+func TestResetRunningMigrations(t *testing.T) {
+	d, err := db.Open(":memory:")
+	require.NoError(t, err)
+	defer d.Close()
+	s := store.New(d)
+	ctx := context.Background()
+
+	_, err = s.CreateRepo(ctx, "r1", "R1", "https://x/r1.git", "", "main")
+	require.NoError(t, err)
+	_, err = s.CreateRepo(ctx, "r2", "R2", "https://x/r2.git", "", "main")
+	require.NoError(t, err)
+
+	// r1 is stuck "running"; r2 is untouched ("idle").
+	require.NoError(t, s.SetRepoMigrationStatus(ctx, "r1", "running", 3, 1))
+
+	n, err := s.ResetRunningMigrations(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	r1, err := s.GetRepo(ctx, "r1")
+	require.NoError(t, err)
+	require.Equal(t, "failed", r1.MigrationStatus)
+
+	r2, err := s.GetRepo(ctx, "r2")
+	require.NoError(t, err)
+	require.Equal(t, "idle", r2.MigrationStatus)
+}
