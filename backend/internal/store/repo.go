@@ -25,7 +25,8 @@ func (s *Store) CreateRepo(ctx context.Context, id, name, remoteURL, encCreds, b
 func (s *Store) GetRepo(ctx context.Context, id string) (*model.Repo, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at, allow_guest
+		       local_path, cloned_at, last_used_at, created_at, allow_guest,
+		       storage_destination_id, migration_status, migration_total, migration_done
 		FROM repos WHERE id=?`, id)
 	return scanRepo(row)
 }
@@ -33,7 +34,8 @@ func (s *Store) GetRepo(ctx context.Context, id string) (*model.Repo, error) {
 func (s *Store) ListRepos(ctx context.Context) ([]*model.Repo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at, allow_guest
+		       local_path, cloned_at, last_used_at, created_at, allow_guest,
+		       storage_destination_id, migration_status, migration_total, migration_done
 		FROM repos ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -93,7 +95,8 @@ func (s *Store) TouchLastUsedAt(ctx context.Context, id string) error {
 func (s *Store) ListStaleRepos(ctx context.Context, cutoff time.Time) ([]*model.Repo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
-		       local_path, cloned_at, last_used_at, created_at, allow_guest
+		       local_path, cloned_at, last_used_at, created_at, allow_guest,
+		       storage_destination_id, migration_status, migration_total, migration_done
 		FROM repos WHERE local_path IS NOT NULL AND last_used_at < ?`, cutoff)
 	if err != nil {
 		return nil, err
@@ -115,9 +118,11 @@ func scanRepo(row scanner) (*model.Repo, error) {
 	var localPath sql.NullString
 	var clonedAt, lastUsedAt sql.NullTime
 	var allowGuest int
+	var destID sql.NullString
 	err := row.Scan(
 		&r.ID, &r.Name, &r.RemoteURL, &r.EncryptedCreds, &r.DefaultBranch,
 		&localPath, &clonedAt, &lastUsedAt, &r.CreatedAt, &allowGuest,
+		&destID, &r.MigrationStatus, &r.MigrationTotal, &r.MigrationDone,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -135,5 +140,27 @@ func scanRepo(row scanner) (*model.Repo, error) {
 		r.LastUsedAt = &lastUsedAt.Time
 	}
 	r.AllowGuest = allowGuest != 0
+	if destID.Valid {
+		r.StorageDestinationID = &destID.String
+	}
 	return &r, nil
+}
+
+func (s *Store) SetRepoStorageDestination(ctx context.Context, repoID string, destID *string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE repos SET storage_destination_id=? WHERE id=?`, destID, repoID)
+	return err
+}
+
+func (s *Store) SetRepoMigrationStatus(ctx context.Context, repoID, status string, total, done int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE repos SET migration_status=?, migration_total=?, migration_done=? WHERE id=?`,
+		status, total, done, repoID)
+	return err
+}
+
+func (s *Store) CountReposUsingDestination(ctx context.Context, destID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM repos WHERE storage_destination_id=?`, destID).Scan(&n)
+	return n, err
 }

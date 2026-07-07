@@ -41,6 +41,11 @@ type Repo struct {
 	LastUsedAt     *time.Time
 	CreatedAt      time.Time
 	AllowGuest     bool
+
+	StorageDestinationID *string // nil = local
+	MigrationStatus      string  // "idle" | "running" | "done" | "failed"
+	MigrationTotal       int
+	MigrationDone        int
 }
 
 type RepoAccess struct {

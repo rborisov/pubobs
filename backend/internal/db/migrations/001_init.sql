@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS repos (
     local_path      TEXT,
     cloned_at       DATETIME,
     last_used_at    DATETIME,
-    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    storage_destination_id TEXT REFERENCES storage_destinations(id),
+    migration_status       TEXT NOT NULL DEFAULT 'idle',
+    migration_total        INTEGER NOT NULL DEFAULT 0,
+    migration_done         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS repo_access (

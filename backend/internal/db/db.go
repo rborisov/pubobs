@@ -51,5 +51,18 @@ func Open(dsn string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migrate group_members.role: %w", err)
 		}
 	}
+	for _, alter := range []string{
+		`ALTER TABLE repos ADD COLUMN storage_destination_id TEXT REFERENCES storage_destinations(id)`,
+		`ALTER TABLE repos ADD COLUMN migration_status TEXT NOT NULL DEFAULT 'idle'`,
+		`ALTER TABLE repos ADD COLUMN migration_total INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE repos ADD COLUMN migration_done INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(alter); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate repos storage columns: %w", err)
+			}
+		}
+	}
 	return db, nil
 }
