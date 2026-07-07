@@ -1,6 +1,13 @@
 const STYLE_ID = 'pubobs-reader-styles';
 
+/**
+ * Injects the reader's (dark-mode-aware) CSS once, and marks <body> so the
+ * dark-mode `body.pubobs-reader-theme` rule below applies. The router clears
+ * the body class on every navigation, so leaving the reader for an admin
+ * page (which has no dark theme) always restores the normal light body.
+ */
 export function ensureReaderStyles(): void {
+  document.body.classList.add('pubobs-reader-theme');
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;
@@ -35,7 +42,10 @@ export function ensureReaderStyles(): void {
         --r-error: #f87171;
       }
     }
-    body { background: var(--r-bg); color: var(--r-text); }
+    /* Scoped to a body class (toggled by the router) rather than a bare
+       "body" selector, so the reader's dark-mode theme never bleeds into
+       the admin panel, which has no dark theme of its own. */
+    body.pubobs-reader-theme { background: var(--r-bg); color: var(--r-text); }
     .r-muted { color: var(--r-text-muted); }
     .r-faint { color: var(--r-text-faint); }
     .r-border-bottom { border-bottom: 1px solid var(--r-border); }

@@ -52,6 +52,10 @@ async function render(): Promise<void> {
     if (!m) continue;
     const params: Record<string, string> = {};
     route.keys.forEach((k, i) => { params[k] = m[i + 1]; });
+    // Reset any page-specific body-level theming before entering a new route.
+    // Views that need it (currently only the reader) re-apply it themselves,
+    // so it never bleeds into routes that didn't ask for it.
+    document.body.classList.remove('pubobs-reader-theme');
     // Views are async (they fetch data before returning their DOM), so show a
     // spinner right away instead of leaving the previous/blank page on screen.
     container.innerHTML = '';
@@ -61,5 +65,6 @@ async function render(): Promise<void> {
     container.appendChild(el);
     return;
   }
+  document.body.classList.remove('pubobs-reader-theme');
   container.innerHTML = `<p style="padding:2rem;color:#888">Page not found: ${path}</p>`;
 }
