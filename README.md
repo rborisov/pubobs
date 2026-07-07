@@ -150,18 +150,29 @@ docker compose restart
 
 ## Storage
 
-Render blobs and media assets can live on local disk or on S3-compatible
-object storage. The `PUBOBS_RENDER_STORE` / `PUBOBS_S3_*` / `PUBOBS_ASSET_DIR`
-environment variables above are **bootstrap-only**: they seed the
-`storage_settings` table the first time the server starts with an empty
-table, and are ignored on every subsequent boot.
+Each repo's render blobs and media assets can live on local disk or on an
+S3-compatible object storage destination, chosen per repo. Git checkouts
+themselves always stay on local disk regardless of this setting.
 
-After first boot, use the **Storage** page in the admin panel (instance
-admin nav) to view usage and change the backend or S3 credentials. Changes
-made there apply live — no container restart needed. A "Migrate existing
-local data to S3" button is available once S3 is configured, to move
-previously-local renders/assets over; it runs as a background job and the
-page reflects progress and updated usage on the next load.
+The `PUBOBS_RENDER_STORE` / `PUBOBS_S3_*` / `PUBOBS_ASSET_DIR` environment
+variables above are **bootstrap-only**: they seed the database the first
+time the server starts with an empty `storage_settings` table, and are
+ignored on every subsequent boot. If they described an S3 configuration,
+that configuration becomes a **default** S3 destination and every existing
+repo is assigned to it; with no S3 configuration, repos default to local
+storage.
+
+After first boot, manage storage from the admin panel:
+
+- The **Storage** page (instance admin nav) manages the list of S3
+  destinations available instance-wide — add, edit, or remove S3
+  credentials and view per-destination usage. Changes apply live — no
+  container restart needed.
+- Each repo's detail page lets you pick that repo's storage: **Local** or
+  any configured S3 destination. Switching a repo's destination migrates
+  its existing renders and assets to the new location as a background job;
+  the page reflects progress and updated usage once the migration
+  completes.
 
 ---
 

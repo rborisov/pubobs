@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/pubobs/backend/internal/auth"
 	"github.com/pubobs/backend/frontend"
+	"github.com/pubobs/backend/internal/auth"
 )
 
 func noCacheFS(next http.Handler) http.Handler {

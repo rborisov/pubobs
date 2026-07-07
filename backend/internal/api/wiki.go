@@ -97,7 +97,6 @@ func serveNoteView(w http.ResponseWriter, r *http.Request, deps *Deps, claims *a
 	})
 }
 
-
 func serveBacklinks(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
 	if err := requireRepoRole(r.Context(), deps, claims, repoID, "reader"); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
