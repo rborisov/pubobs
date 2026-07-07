@@ -60,6 +60,7 @@ export async function storageSettingsView(): Promise<HTMLElement> {
   wrap.appendChild(addBtn);
 
   async function reloadUsage(): Promise<void> {
+    usageWrap.innerHTML = `<div style="color:#64748b;margin:0">Loading usage… <span style="opacity:0.7">(scanning local storage — this can take a moment for large repos)</span></div>`;
     let usage: StorageUsage;
     try {
       usage = await getStorageUsage();
@@ -67,21 +68,25 @@ export async function storageSettingsView(): Promise<HTMLElement> {
       usageWrap.innerHTML = `<p style="color:#c00;margin:0">${e instanceof Error ? e.message : String(e)}</p>`;
       return;
     }
-    const localTotal = usage.local.repos_bytes + usage.local.renders_bytes + usage.local.assets_bytes;
+    const localTotal = usage.local.db_bytes + usage.local.repos_bytes + usage.local.renders_bytes + usage.local.assets_bytes;
     const destLines = usage.destinations.map((d) => {
       if (d.error) {
         return `<div><strong>${esc(d.name)}:</strong> <span style="color:#c00">unavailable — ${esc(d.error)}</span></div>`;
       }
       return `<div><strong>${esc(d.name)}:</strong> ${formatBytes(d.renders_bytes)} renders, ${formatBytes(d.assets_bytes)} assets</div>`;
     }).join('');
+    const row = (label: string, value: string): string =>
+      `<div style="display:flex;justify-content:space-between;max-width:320px"><span>${label}</span><span>${value}</span></div>`;
     usageWrap.innerHTML = `
-      <div><strong>Local:</strong> ${formatBytes(localTotal)}
-        (repos: ${formatBytes(usage.local.repos_bytes)},
-         renders: ${formatBytes(usage.local.renders_bytes)},
-         assets: ${formatBytes(usage.local.assets_bytes)})
-        &nbsp;·&nbsp; <strong>Free disk:</strong> ${formatBytes(usage.local.free_bytes)}
-      </div>
-      ${destLines}
+      <div style="font-weight:600;margin-bottom:6px">Local storage</div>
+      ${row('Database', formatBytes(usage.local.db_bytes))}
+      ${row('Repos', formatBytes(usage.local.repos_bytes))}
+      ${row('Renders', formatBytes(usage.local.renders_bytes))}
+      ${row('Assets', formatBytes(usage.local.assets_bytes))}
+      <div style="border-top:1px solid #cbd5e1;margin:4px 0;max-width:320px"></div>
+      ${row('<strong>Total local</strong>', `<strong>${formatBytes(localTotal)}</strong>`)}
+      ${row('Free disk', formatBytes(usage.local.free_bytes))}
+      ${destLines ? `<div style="font-weight:600;margin:10px 0 4px">Destination usage</div>${destLines}` : ''}
     `;
   }
 

@@ -3,10 +3,24 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/pubobs/backend/internal/auth"
 	"github.com/pubobs/backend/internal/renderstore"
 )
+
+// dbSizeBytes returns the total on-disk size of the SQLite database: the main
+// file plus its -wal and -shm sidecars (present when the DB is in WAL mode).
+// Missing files count as 0.
+func dbSizeBytes(dbPath string) int64 {
+	var total int64
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+	}
+	return total
+}
 
 type destUsage struct {
 	ID           string `json:"id"`
@@ -52,6 +66,7 @@ func handleAdminStorageUsage(deps *Deps) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"local": map[string]any{
 				"free_bytes":    freeBytes,
+				"db_bytes":      dbSizeBytes(deps.Config.DBPath),
 				"repos_bytes":   dirSizeBytes(deps.Config.RepoCacheDir),
 				"renders_bytes": dirSizeBytes(deps.Config.RenderDir),
 				"assets_bytes":  dirSizeBytes(deps.Config.AssetDir),

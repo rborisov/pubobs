@@ -27,6 +27,12 @@ func TestAdminStorageUsage_localBreakdown(t *testing.T) {
 	deps.Resolver = newTestResolver(t, deps)
 	require.NoError(t, os.WriteFile(filepath.Join(deps.Config.RenderDir, "x.enc"), []byte("12345"), 0644))
 
+	// A DB file (7 bytes) plus a -wal sidecar (3 bytes) → db_bytes should sum to 10.
+	dbPath := filepath.Join(t.TempDir(), "pubobs.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("dbbytes"), 0644))
+	require.NoError(t, os.WriteFile(dbPath+"-wal", []byte("wal"), 0644))
+	deps.Config.DBPath = dbPath
+
 	req := httptest.NewRequest("GET", "/api/admin/storage-usage", nil)
 	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
 	rr := httptest.NewRecorder()
@@ -36,10 +42,12 @@ func TestAdminStorageUsage_localBreakdown(t *testing.T) {
 	var body struct {
 		Local struct {
 			RendersBytes float64 `json:"renders_bytes"`
+			DBBytes      float64 `json:"db_bytes"`
 		} `json:"local"`
 		Destinations []any `json:"destinations"`
 	}
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 	require.Equal(t, float64(5), body.Local.RendersBytes)
+	require.Equal(t, float64(10), body.Local.DBBytes, "db_bytes = db file (7) + -wal sidecar (3)")
 	require.Empty(t, body.Destinations, "no S3 destinations configured in this test")
 }

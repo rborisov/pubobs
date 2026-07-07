@@ -382,7 +382,7 @@ export interface StorageDestinationInput {
 }
 
 export interface StorageUsage {
-  local: { free_bytes: number; repos_bytes: number; renders_bytes: number; assets_bytes: number };
+  local: { free_bytes: number; db_bytes: number; repos_bytes: number; renders_bytes: number; assets_bytes: number };
   destinations: { id: string; name: string; renders_bytes: number; assets_bytes: number; error?: string }[];
 }
 
