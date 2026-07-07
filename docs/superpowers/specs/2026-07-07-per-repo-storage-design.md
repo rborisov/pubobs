@@ -1,4 +1,4 @@
-# Per-repo storage destinations + aggressive git eviction
+# Per-repo storage destinations (+ deferred git-cache decision)
 
 ## Goal
 
@@ -6,16 +6,21 @@ Two related storage improvements, driven by real disk pressure on a
 constrained VPS (live usage: 735 MB total / 480 MB free, of which repos are
 699 MB, renders 36 MB, assets 0 B):
 
-1. **Reclaim the 699 MB of git checkouts** by evicting them from local disk
-   much sooner than the current 24 h TTL — re-cloning from the git remote on
-   demand when next needed.
-2. **Per-repo storage destinations** for renders and assets: an admin manages
+1. **Per-repo storage destinations** for renders and assets: an admin manages
    a named list of S3 destinations (buckets/credentials), and each repo
    independently chooses `Local` or one of those destinations for its
-   rendered-note content and media assets.
+   rendered-note content and media assets. **This is the work being
+   implemented now** (was "Phase 2" in an earlier draft).
+2. **Reclaiming the 699 MB of git checkouts** — the larger disk win, but
+   **deliberately deferred**: how the git cache should be handled is an open
+   question with more than one candidate approach (see "Deferred: git-cache
+   location" below), and the user wants to decide it *after* the S3 work
+   lands, in its own design pass. It is out of scope for the implementation
+   plan that follows from this spec.
 
-These ship as two phases so the disk win (Phase 1) lands first and cheaply,
-independent of the larger Phase 2 build.
+Reordering rationale: the two are independent, and the per-repo S3 work is
+well-understood and ready to build, whereas the git-cache approach is not yet
+settled.
 
 ## Context and prior decisions
 
@@ -26,53 +31,44 @@ and assets. That machinery (`renderstore.RenderStore`, `EncryptingStore`,
 `SwappableStore`, the S3 client, `RunMigrationCycle`, the admin Storage page)
 is reused heavily here — this is a generalization of it, not a rewrite.
 
-**Explicitly rejected during design:** putting git repo data itself on S3
-(via bundles or a FUSE-mounted object store). Rationale: the git *remote*
-(GitHub/Gitea/etc.) is already a complete, durable copy of every repo, so the
-699 MB of local checkouts is purely disposable cache. Aggressive eviction +
-re-clone-from-remote reclaims that disk with near-zero complexity, whereas
-git-on-S3 (bundles: encrypt/upload/restore plumbing; FUSE: privileged
-container, slow/fragile for git's write patterns) adds significant complexity
-for a benefit the remote already provides. Git checkouts therefore stay on
-local disk; only renders/assets are ever stored on S3.
+Note on git data: this spec does **not** put git repo data on S3. The git
+*remote* (GitHub/Gitea/etc.) is already a complete, durable copy of every
+repo, so the 699 MB of local checkouts is purely disposable cache. How to
+reclaim that cache is deferred to its own design pass (below); the per-repo
+work here concerns only renders and assets.
 
-## Phase 1: Aggressive git eviction
+## Deferred: git-cache location (separate future design)
 
-### Behavior
+**Not implemented by this spec's plan.** Captured here so the candidate
+approaches aren't lost; to be decided in its own brainstorm after the
+per-repo S3 work ships.
 
-The existing eviction job (`backend/internal/jobs/eviction.go`,
-`RunEvictionCycle`) already evicts repos whose `LastUsedAt` is older than
-`cfg.RepoCacheTTL` (default 24 h) and re-clones on next access. Phase 1 is a
-**tuning change, not new architecture**: lower the default idle TTL so
-checkouts are reclaimed within roughly an hour of inactivity instead of a day.
+Candidate approaches discussed so far:
 
-- Default `PUBOBS_REPO_CACHE_TTL` drops from `24h` to `1h`.
-- `PUBOBS_CACHE_CHECK_INTERVAL` (how often the job runs, default `1h`) drops
-  to a shorter interval (e.g. `15m`) so an idle repo is actually reclaimed
-  within ~1 h of its last use rather than lagging a full check cycle behind.
-- `LastUsedAt` must be touched by every operation that uses the checkout so a
-  genuinely active repo stays warm: syncs (already call `TouchLastUsedAt`),
-  plus the read paths that still hit the checkout — comment reads
-  (`handlePubComments` → `ReadRawFile`) and legacy-note reads
-  (`handlePubGetNote` → `ReadRenderedHTML` when a note has no render key).
-  Audit these paths and add `TouchLastUsedAt` where missing, so a repo being
-  actively read isn't evicted out from under a burst of reads.
+1. **Aggressive eviction + re-clone from remote.** Lower the idle TTL
+   (`PUBOBS_REPO_CACHE_TTL` 24 h → ~1 h) and check interval, touch
+   `LastUsedAt` on the read paths that still hit the checkout (comment reads
+   via `handlePubComments`→`ReadRawFile`; legacy-note reads via
+   `handlePubGetNote`→`ReadRenderedHTML`) so active repos stay warm. Nearly
+   zero new code; reclaims disk within ~1 h of inactivity; re-clones from the
+   remote on demand. Safe because the remote is the source of truth.
+2. **Store the git cache inside Obsidian (user's preferred idea to explore).**
+   The Obsidian vault on the user's own machine already *is* the content, and
+   the plugin already runs there. The concept: shift git responsibility toward
+   the plugin/vault side so the VPS need not hold a working checkout at all.
+   This is a meaningfully larger architectural change (the plugin would take
+   on git-push responsibility currently done server-side; the backend's
+   reasons for keeping a checkout — committing synced markdown + comments and
+   pushing to the remote — would need to move or be re-hosted). It needs its
+   own brainstorm to work out feasibility and boundaries before any
+   commitment.
 
-### Why this is safe
+Rejected earlier: git-on-S3 via bundles or a FUSE-mounted object store —
+significant complexity (encrypt/upload/restore, or a privileged container
+with slow/fragile FUSE-over-S3 for git's write patterns) for a benefit the
+git remote already provides.
 
-The git remote remains the source of truth. An evicted checkout is
-re-cloned from the remote on the next sync/comment/legacy read (existing
-`getOrClone` behavior). Renders and assets are already served from their own
-stores (prior feature), so evicting the checkout does not affect normal note
-rendering. Steady-state disk for an idle repo drops to ~0; it spikes only
-briefly during active use.
-
-### Out of scope for Phase 1
-
-No change to *where* checkouts live (always local) and no per-repo eviction
-policy — the shorter TTL is instance-wide.
-
-## Phase 2: Per-repo storage destinations (renders + assets)
+## Per-repo storage destinations (renders + assets) — current scope
 
 ### Data model
 
@@ -200,9 +196,6 @@ On upgrade, the prior feature's single `storage_settings` row is converted:
 
 ## Testing
 
-- **Phase 1:** eviction reclaims an idle repo's checkout after the shortened
-  TTL; an actively-read repo (comment/legacy read touches `LastUsedAt`) is not
-  evicted mid-activity; an evicted repo re-clones correctly on next access.
 - **Resolver:** returns the correct store-set per repo based on its
   `storage_destination_id` (local for `NULL`, the right destination
   otherwise); rebuilds correctly after a destination edit or repo reassignment.
