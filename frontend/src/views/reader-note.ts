@@ -1,6 +1,7 @@
 import { pubGetNote, pubListComments, addComment, type PubNoteDetail, type PubComment } from '../api';
 import { isAuthenticated } from '../auth';
 import { ensureReaderStyles } from '../reader-styles';
+import { loadingRow } from '../spinner';
 
 export async function readerNoteView(repoId: string, rawNotePath: string): Promise<HTMLElement> {
   ensureReaderStyles();
@@ -178,9 +179,9 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
 
   const list = document.createElement('div');
   list.id = `comments-list-${note.id}`;
-  list.textContent = 'Loading…';
   list.className = 'r-faint';
   list.style.fontSize = '0.875rem';
+  list.appendChild(loadingRow('Loading comments…', 14));
   section.appendChild(list);
 
   // Post form (authenticated) or sign-in prompt

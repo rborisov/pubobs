@@ -3,6 +3,7 @@ import {
   getStorageUsage,
   type StorageDestination, type StorageDestinationInput, type StorageUsage,
 } from '../api';
+import { loadingRow } from '../spinner';
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -60,7 +61,14 @@ export async function storageSettingsView(): Promise<HTMLElement> {
   wrap.appendChild(addBtn);
 
   async function reloadUsage(): Promise<void> {
-    usageWrap.innerHTML = `<div style="color:#64748b;margin:0">Loading usage… <span style="opacity:0.7">(scanning local storage — this can take a moment for large repos)</span></div>`;
+    usageWrap.innerHTML = '';
+    const loading = loadingRow('Loading usage…');
+    loading.style.color = '#64748b';
+    const hint = document.createElement('span');
+    hint.style.cssText = 'opacity:0.7;margin-left:4px';
+    hint.textContent = '(scanning local storage — this can take a moment for large repos)';
+    loading.appendChild(hint);
+    usageWrap.appendChild(loading);
     let usage: StorageUsage;
     try {
       usage = await getStorageUsage();
@@ -91,6 +99,10 @@ export async function storageSettingsView(): Promise<HTMLElement> {
   }
 
   async function reloadDestinations(): Promise<void> {
+    listWrap.innerHTML = '';
+    const loading = loadingRow('Loading destinations…');
+    loading.style.color = '#64748b';
+    listWrap.appendChild(loading);
     let dests: StorageDestination[];
     try {
       dests = await listStorageDestinations();

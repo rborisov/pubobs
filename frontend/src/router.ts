@@ -1,3 +1,5 @@
+import { fullPageLoader } from './spinner';
+
 type ViewFactory = (params: Record<string, string>) => HTMLElement | Promise<HTMLElement>;
 
 interface Route {
@@ -50,6 +52,10 @@ async function render(): Promise<void> {
     if (!m) continue;
     const params: Record<string, string> = {};
     route.keys.forEach((k, i) => { params[k] = m[i + 1]; });
+    // Views are async (they fetch data before returning their DOM), so show a
+    // spinner right away instead of leaving the previous/blank page on screen.
+    container.innerHTML = '';
+    container.appendChild(fullPageLoader());
     const el = await route.factory(params);
     container.innerHTML = '';
     container.appendChild(el);
