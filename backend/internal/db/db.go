@@ -102,5 +102,21 @@ func Open(dsn string) (*sql.DB, error) {
 			}
 		}
 	}
+	// encryption_key/shared_publicly are lazily populated per note (see
+	// store.GetOrCreateNoteKey / SetNoteShared) rather than backfilled here —
+	// existing rows start with an empty key and shared_publicly=false, so
+	// nothing becomes publicly link-accessible just from running this
+	// migration.
+	for _, alter := range []string{
+		`ALTER TABLE notes ADD COLUMN encryption_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE notes ADD COLUMN shared_publicly INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(alter); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate notes sharing columns: %w", err)
+			}
+		}
+	}
 	return db, nil
 }

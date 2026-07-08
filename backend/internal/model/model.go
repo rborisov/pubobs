@@ -61,6 +61,15 @@ type Note struct {
 	RepoID    string
 	Path      string
 	UpdatedAt time.Time
+
+	// Excluded from the default JSON encoding (json:"-"): this struct is
+	// serialized as-is by a few internal, authenticated endpoints (e.g.
+	// backlinks) that have no business exposing a note's raw share key.
+	// Handlers that DO need to return sharing state (share.go) build their
+	// own explicit response maps instead of relying on this struct's
+	// encoding.
+	EncryptionKey  string `json:"-"` // base64url, 32 raw random bytes; '' until first lazily generated
+	SharedPublicly bool   `json:"-"`
 }
 
 type NoteSnapshot struct {

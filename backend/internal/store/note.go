@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -11,9 +13,29 @@ import (
 	"github.com/pubobs/backend/internal/model"
 )
 
+const noteColumns = `id, repo_id, path, updated_at, encryption_key, shared_publicly`
+
+// scanNote scans a row/rows shaped like noteColumns into a model.Note.
+func scanNote(row scanner) (*model.Note, error) {
+	var n model.Note
+	var shared int
+	err := row.Scan(&n.ID, &n.RepoID, &n.Path, &n.UpdatedAt, &n.EncryptionKey, &shared)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan note: %w", err)
+	}
+	n.SharedPublicly = shared != 0
+	return &n, nil
+}
+
 func (s *Store) UpsertNote(ctx context.Context, repoID, path string) (*model.Note, error) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
+	// encryption_key/shared_publicly are intentionally absent from the
+	// UPDATE clause: a re-sync of an existing note must never clobber an
+	// already-issued key or its share state.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO notes (id, repo_id, path, updated_at) VALUES (?,?,?,?)
 		ON CONFLICT(repo_id, path) DO UPDATE SET updated_at=excluded.updated_at`,
@@ -26,44 +48,108 @@ func (s *Store) UpsertNote(ctx context.Context, repoID, path string) (*model.Not
 }
 
 func (s *Store) GetNote(ctx context.Context, repoID, path string) (*model.Note, error) {
-	var n model.Note
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, repo_id, path, updated_at FROM notes WHERE repo_id=? AND path=?`,
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+noteColumns+` FROM notes WHERE repo_id=? AND path=?`,
 		repoID, path,
-	).Scan(&n.ID, &n.RepoID, &n.Path, &n.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return &n, err
+	)
+	return scanNote(row)
 }
 
 func (s *Store) GetNoteByID(ctx context.Context, id string) (*model.Note, error) {
-	var n model.Note
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, repo_id, path, updated_at FROM notes WHERE id=?`, id,
-	).Scan(&n.ID, &n.RepoID, &n.Path, &n.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return &n, err
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+noteColumns+` FROM notes WHERE id=?`, id,
+	)
+	return scanNote(row)
 }
 
 func (s *Store) ListNotes(ctx context.Context, repoID string) ([]*model.Note, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, repo_id, path, updated_at FROM notes WHERE repo_id=? ORDER BY path`, repoID)
+		`SELECT `+noteColumns+` FROM notes WHERE repo_id=? ORDER BY path`, repoID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*model.Note
 	for rows.Next() {
-		var n model.Note
-		if err := rows.Scan(&n.ID, &n.RepoID, &n.Path, &n.UpdatedAt); err != nil {
+		n, err := scanNote(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &n)
+		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// GenerateNoteKey returns a fresh base64url-encoded 32-byte random key. It's
+// exported so both the lazy get-or-create path below and the forced-rotate
+// path used by the unshare/revoke handler can share the exact same
+// generation logic without duplicating it.
+func GenerateNoteKey() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate note key: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// GetOrCreateNoteKey returns the note's current encryption key, generating
+// and persisting one if it doesn't have one yet. The write is guarded by a
+// WHERE encryption_key='' clause so two near-simultaneous callers can't each
+// mint a different key and disagree about which one is actually stored:
+// whichever UPDATE lands first wins, and the loser re-reads to return the
+// same key the winner persisted.
+func (s *Store) GetOrCreateNoteKey(ctx context.Context, noteID string) (string, error) {
+	note, err := s.GetNoteByID(ctx, noteID)
+	if err != nil {
+		return "", err
+	}
+	if note == nil {
+		return "", fmt.Errorf("note not found: %s", noteID)
+	}
+	if note.EncryptionKey != "" {
+		return note.EncryptionKey, nil
+	}
+	newKey, err := GenerateNoteKey()
+	if err != nil {
+		return "", err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE notes SET encryption_key=? WHERE id=? AND encryption_key=''`,
+		newKey, noteID)
+	if err != nil {
+		return "", fmt.Errorf("persist note key: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		// Someone else's UPDATE already won the race — read back whatever
+		// they persisted instead of returning our unused, now-orphaned key.
+		note, err = s.GetNoteByID(ctx, noteID)
+		if err != nil {
+			return "", err
+		}
+		if note == nil {
+			return "", fmt.Errorf("note not found: %s", noteID)
+		}
+		return note.EncryptionKey, nil
+	}
+	return newKey, nil
+}
+
+// SetNoteShared always writes shared_publicly and encryption_key together so
+// the two columns can never drift out of sync (e.g. shared=true with a
+// stale/empty key).
+func (s *Store) SetNoteShared(ctx context.Context, noteID string, shared bool, key string) error {
+	v := 0
+	if shared {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE notes SET shared_publicly=?, encryption_key=? WHERE id=?`,
+		v, key, noteID)
+	return err
 }
 
 func (s *Store) UpsertSnapshot(ctx context.Context, noteID, htmlContent, metadataJSON, syncedBy, commitSHA string) error {
@@ -118,7 +204,7 @@ func (s *Store) DeleteNote(ctx context.Context, repoID, path string) error {
 // GetBacklinks returns notes (in the same repo) that link to targetPath.
 func (s *Store) GetBacklinks(ctx context.Context, repoID, targetPath string) ([]*model.Note, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.id, n.repo_id, n.path, n.updated_at
+		SELECT n.id, n.repo_id, n.path, n.updated_at, n.encryption_key, n.shared_publicly
 		FROM notes n
 		JOIN note_links nl ON nl.source_note_id = n.id
 		WHERE n.repo_id=? AND nl.target_path=?`,
@@ -129,11 +215,11 @@ func (s *Store) GetBacklinks(ctx context.Context, repoID, targetPath string) ([]
 	defer rows.Close()
 	var out []*model.Note
 	for rows.Next() {
-		var n model.Note
-		if err := rows.Scan(&n.ID, &n.RepoID, &n.Path, &n.UpdatedAt); err != nil {
+		n, err := scanNote(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &n)
+		out = append(out, n)
 	}
 	return out, rows.Err()
 }

@@ -47,10 +47,12 @@ CREATE TABLE IF NOT EXISTS repo_access (
 );
 
 CREATE TABLE IF NOT EXISTS notes (
-    id         TEXT PRIMARY KEY,
-    repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    path       TEXT NOT NULL,
-    updated_at DATETIME NOT NULL,
+    id              TEXT PRIMARY KEY,
+    repo_id         TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    path            TEXT NOT NULL,
+    updated_at      DATETIME NOT NULL,
+    encryption_key  TEXT NOT NULL DEFAULT '', -- base64url, 32 raw random bytes; lazily generated
+    shared_publicly INTEGER NOT NULL DEFAULT 0,
     UNIQUE (repo_id, path)
 );
 
