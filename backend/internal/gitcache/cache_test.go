@@ -45,6 +45,78 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 	require.Contains(t, paths, "newdoc.md")
 }
 
+// TestCache_ListFiles_RecoversFromCorruptedClone simulates a local clone left
+// in a corrupted state by an interrupted git operation (e.g. disk exhaustion
+// mid-fetch, or a killed process) — .git exists on disk but HEAD points at a
+// ref that doesn't resolve to any commit. Before the self-healing fix, this
+// would permanently wedge ListFiles for the repo; it should now transparently
+// wipe the broken clone and re-clone from the remote.
+func TestCache_ListFiles_RecoversFromCorruptedClone(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "corrupt-repo",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	// Establish a healthy local clone first.
+	_, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+
+	localPath := filepath.Join(cacheDir, "corrupt-repo")
+	headPath := filepath.Join(localPath, ".git", "HEAD")
+	require.NoError(t, os.WriteFile(headPath, []byte("ref: refs/heads/does-not-exist\n"), 0644))
+
+	entries, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err, "ListFiles should self-heal a corrupted local clone by re-cloning")
+	var paths []string
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	require.Contains(t, paths, "hello.md")
+}
+
+// TestCache_Sync_ClearsStaleLockFile simulates a leftover .git/index.lock
+// from a previous git process killed mid-operation. Since all git operations
+// for a repo are serialized through Cache's per-repo mutex, this lock file
+// can never be legitimately held by a concurrently-running process, so it
+// must be cleared automatically rather than wedging every future operation.
+func TestCache_Sync_ClearsStaleLockFile(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "locked-repo",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	_, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+
+	localPath := filepath.Join(cacheDir, "locked-repo")
+	lockPath := filepath.Join(localPath, ".git", "index.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(""), 0644))
+
+	_, err = cache.Sync(context.Background(), repo, "", []gitcache.SyncFile{
+		{Path: "second.md", MDContent: "# Second"},
+	}, []gitcache.SyncAsset{}, "sync 2024-01-02 by alice")
+	require.NoError(t, err, "Sync should clear a stale index.lock left by an interrupted process")
+
+	_, statErr := os.Stat(lockPath)
+	require.True(t, os.IsNotExist(statErr), "stale lock file should have been removed")
+}
+
 func TestCache_AppendComment(t *testing.T) {
 	bareURL := newBareRepo(t)
 	seedBareRepo(t, bareURL)

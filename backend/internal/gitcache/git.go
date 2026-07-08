@@ -85,6 +85,17 @@ func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	return err
 }
 
+// IsHealthy reports whether an existing local clone is in a usable state, by
+// checking that git can resolve HEAD to a real commit. A clone left behind by
+// an interrupted operation (e.g. disk exhaustion or a killed process mid-clone
+// or mid-fetch) can have a .git directory on disk that git itself can no
+// longer read — missing objects, a dangling HEAD, or an incomplete ref. This
+// is a cheap, local-only check: it never touches the network.
+func (g *GitRunner) IsHealthy(dir string) bool {
+	_, err := g.run(dir, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
+}
+
 // FetchReset fetches the latest commit (depth=1) for branch and hard-resets to it.
 // Fetching by name (no :<dst>) avoids non-fast-forward rejection on shallow clones.
 func (g *GitRunner) FetchReset(dir, remoteURL, credJSON, branch string) error {

@@ -70,13 +70,20 @@ export class BackendClient {
     try {
       body = resp.json;
     } catch {
-      // Non-JSON body — e.g. an nginx error page for an oversized request or a
-      // gateway timeout. Surface something actionable instead of the raw
-      // "Unexpected token '<'... is not valid JSON" parse error.
+      // Non-JSON body — PubObs itself always responds with JSON (including
+      // its own intentional error statuses, e.g. a 502 it returns when it
+      // fails to read a repo's local git state — that case would show up as
+      // a normal, specific error message below, not here). Reaching this
+      // branch means something in front of PubObs (or PubObs not running at
+      // all) returned a non-JSON error page instead — e.g. a reverse-proxy
+      // rejection (payload too large, gateway timeout) or the backend being
+      // unreachable. The status code alone doesn't tell us which, so avoid
+      // guessing a single specific cause here.
       throw new Error(
         `Server returned a non-JSON response (HTTP ${resp.status}). ` +
-        'This usually means the request was rejected before reaching PubObs ' +
-        '(e.g. payload too large, or a proxy/gateway error).'
+        'This usually means the request did not reach a running PubObs backend ' +
+        '(e.g. a proxy/gateway rejection or timeout, or the backend being down) ' +
+        'rather than an error PubObs itself reported.'
       );
     }
 

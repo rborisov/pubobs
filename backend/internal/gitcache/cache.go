@@ -3,6 +3,8 @@ package gitcache
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,26 +56,92 @@ func (c *Cache) repoDir(repoID string) string {
 }
 
 // getOrClone ensures the repo is cloned locally. Must be called with repo lock held.
+//
+// A local clone can be left corrupted or incomplete if a previous clone/fetch
+// was interrupted mid-operation (e.g. by disk exhaustion or a container
+// restart) — the .git directory exists on disk but git can no longer read it,
+// or a lock file from the killed process is still sitting there. Without
+// self-healing, that permanently wedges every future ListFiles/Sync call for
+// that repo (FetchReset would fail forever) until a human manually deletes
+// the on-disk clone. To recover automatically:
+//  1. Clear any *.lock files under .git — safe unconditionally, since all git
+//     operations for this repo are serialized through repoLock, so a lock
+//     file found here can only be a leftover from a previously-killed process,
+//     never one held by a process running concurrently with us.
+//  2. Run a cheap local sanity check (resolve HEAD) before trusting the
+//     existing clone. If it fails, the clone is corrupted/incomplete
+//     independent of network state, so wipe it and clone fresh. A plain
+//     network/auth failure during FetchReset (healthy local clone, remote
+//     just unreachable) does NOT trigger a wipe — that would be wasteful and
+//     wrong, discarding a good incremental cache over a transient issue.
 func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 	dir := c.repoDir(repo.ID)
-	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("mkdir %s: %w", dir, err)
-		}
-		if err := c.git.Clone(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-			os.RemoveAll(dir)
-			return "", fmt.Errorf("clone %s: %w", repo.RemoteURL, err)
-		}
-		if err := c.git.InitializeIfEmpty(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-			os.RemoveAll(dir)
-			return "", fmt.Errorf("initialize %s: %w", repo.RemoteURL, err)
-		}
-	} else {
-		if err := c.git.FetchReset(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-			return "", fmt.Errorf("fetch-reset %s: %w", repo.ID, err)
-		}
+	gitDir := filepath.Join(dir, ".git")
+
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return dir, c.freshClone(dir, repo, credJSON)
+	}
+
+	if err := clearStaleGitLocks(gitDir); err != nil {
+		log.Printf("gitcache: clear stale locks for %s: %v", repo.ID, err)
+	}
+
+	if !c.git.IsHealthy(dir) {
+		log.Printf("gitcache: local clone for %s is corrupted/incomplete, re-cloning from scratch", repo.ID)
+		return dir, c.freshClone(dir, repo, credJSON)
+	}
+
+	if err := c.git.FetchReset(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
+		return "", fmt.Errorf("fetch-reset %s: %w", repo.ID, err)
 	}
 	return dir, nil
+}
+
+// freshClone wipes any existing (corrupted/incomplete) local clone directory
+// and clones the repo from scratch.
+func (c *Cache) freshClone(dir string, repo *model.Repo, credJSON string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove existing clone %s: %w", dir, err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	if err := c.git.Clone(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
+		os.RemoveAll(dir)
+		return fmt.Errorf("clone %s: %w", repo.RemoteURL, err)
+	}
+	if err := c.git.InitializeIfEmpty(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
+		os.RemoveAll(dir)
+		return fmt.Errorf("initialize %s: %w", repo.RemoteURL, err)
+	}
+	return nil
+}
+
+// clearStaleGitLocks removes leftover *.lock files under a repo's .git
+// directory (e.g. index.lock, shallow.lock, HEAD.lock). These are only ever
+// created transiently by a running git process; if one still exists here, it
+// can only be a leftover from a previous process that was killed mid-operation,
+// since callers always hold this repo's mutex across every git invocation.
+func clearStaleGitLocks(gitDir string) error {
+	var stale []string
+	err := filepath.WalkDir(gitDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // best-effort; skip entries we can't stat
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".lock") {
+			stale = append(stale, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, p := range stale {
+		if rmErr := os.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
+			return rmErr
+		}
+	}
+	return nil
 }
 
 // Sync writes files to the cache, commits them, and pushes.
@@ -143,7 +211,6 @@ func (c *Cache) ListFiles(ctx context.Context, repo *model.Repo, credJSON string
 	}
 	return out, nil
 }
-
 
 // IsCloned reports whether a local git checkout currently exists on disk for
 // this repo. The local clone lives in this node's cache directory and is
