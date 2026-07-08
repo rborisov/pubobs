@@ -55,9 +55,18 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			if !claims.IsAdmin {
 				role = roles[repo.ID]
 			}
+			// IsCloned reflects whether this node currently has a local git
+			// checkout for the repo (checked live via deps.Cache), not the
+			// repos.local_path DB column: that column is never written by the
+			// normal sync/browse/import paths (gitcache.Cache clones lazily
+			// straight to disk), so it would always read as "not cloned" here.
+			isCloned := false
+			if deps.Cache != nil {
+				isCloned = deps.Cache.IsCloned(repo.ID)
+			}
 			out[i] = repoResp{
 				ID: repo.ID, Name: repo.Name, RemoteURL: repo.RemoteURL,
-				DefaultBranch: repo.DefaultBranch, IsCloned: repo.LocalPath != nil,
+				DefaultBranch: repo.DefaultBranch, IsCloned: isCloned,
 				Role: role, AllowGuest: repo.AllowGuest,
 				StorageDestinationID: repo.StorageDestinationID, MigrationStatus: repo.MigrationStatus,
 			}

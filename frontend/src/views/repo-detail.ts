@@ -57,7 +57,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
     <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;color:#475569">
       <span style="font-weight:600">Remote</span><span>${esc(repo.remote_url)}</span>
       <span style="font-weight:600">Branch</span><span>${esc(repo.default_branch)}</span>
-      <span style="font-weight:600">Status</span><span>${repo.is_cloned ? '● cloned' : '○ not cloned'}</span>
+      <span style="font-weight:600" title="Whether this server currently has a local working copy of the repo (created automatically the first time it's synced, browsed, or imported).">Status</span><span>${repo.is_cloned ? '● cloned' : '○ not cloned yet'}</span>
     </div>
   `;
   wrap.appendChild(card);

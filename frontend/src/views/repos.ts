@@ -65,7 +65,9 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
 
   const table = document.createElement('table');
   table.innerHTML = `<thead><tr>
-    <th>Name</th><th>Remote</th><th>Branch</th><th>Status</th><th>Guest</th><th></th>
+    <th>Name</th><th>Remote</th><th>Branch</th>
+    <th title="Whether this server currently has a local working copy of the repo (created automatically the first time it's synced, browsed, or imported).">Status</th>
+    <th>Guest</th><th></th>
   </tr></thead>`;
 
   const tbody = document.createElement('tbody');
@@ -93,7 +95,10 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
     branchCell.textContent = repo.default_branch;
 
     const statusCell = document.createElement('td');
-    statusCell.textContent = repo.is_cloned ? '● cloned' : '○ pending';
+    statusCell.textContent = repo.is_cloned ? '● cloned' : '○ not cloned yet';
+    statusCell.title = repo.is_cloned
+      ? 'This server has a local working copy of the repo, ready to serve.'
+      : 'No local copy yet — this happens automatically on first sync, browse, or Import.';
     statusCell.style.color = repo.is_cloned ? '#16a34a' : '#94a3b8';
 
     const guestCell = document.createElement('td');
@@ -129,6 +134,7 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
       editLink.title = 'Repository, storage, and access settings';
       editLink.style.cssText = 'color:#5B6B8E;text-decoration:underline;font-size:0.8rem;margin-right:8px';
       const importBtn = mkBtn('Import', 'link');
+      importBtn.title = 'Scan the remote repo\u2019s existing markdown files and register them as notes in PubObs (useful if the repo already had notes before being added here, or after pushing changes outside the Obsidian plugin).';
       importBtn.style.marginRight = '8px';
       const delBtn = mkBtn('Delete', 'link-danger');
       actionsCell.appendChild(editLink);

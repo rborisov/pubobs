@@ -145,6 +145,16 @@ func (c *Cache) ListFiles(ctx context.Context, repo *model.Repo, credJSON string
 }
 
 
+// IsCloned reports whether a local git checkout currently exists on disk for
+// this repo. The local clone lives in this node's cache directory and is
+// created lazily on first access (sync, browse, or import) and removed by
+// eviction once the repo goes stale, so this is checked live against the
+// filesystem rather than a persisted flag.
+func (c *Cache) IsCloned(repoID string) bool {
+	_, err := os.Stat(filepath.Join(c.repoDir(repoID), ".git"))
+	return err == nil
+}
+
 // Evict removes the local clone for a repo.
 func (c *Cache) Evict(repoID string) error {
 	lock := c.repoLock(repoID)
