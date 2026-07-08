@@ -57,18 +57,24 @@ func handleNoteGet(deps *Deps) http.HandlerFunc {
 	}
 }
 
-// handleNotePost dispatches POST /api/repos/{id}/notes/* (only /comments supported).
+// handleNotePost dispatches POST /api/repos/{id}/notes/* based on path suffix
+// (/comments, /share, /unshare).
 func handleNotePost(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
 		repoID := chi.URLParam(r, "id")
 		notePath := chi.URLParam(r, "*")
 
-		if strings.HasSuffix(notePath, "/comments") {
+		switch {
+		case strings.HasSuffix(notePath, "/comments"):
 			serveAddComment(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/comments"))
-			return
+		case strings.HasSuffix(notePath, "/share"):
+			serveShareNote(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/share"))
+		case strings.HasSuffix(notePath, "/unshare"):
+			serveUnshareNote(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/unshare"))
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
