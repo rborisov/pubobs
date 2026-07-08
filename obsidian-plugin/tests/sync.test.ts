@@ -320,6 +320,23 @@ describe('SyncManager.syncRepo', () => {
     expect(settings.pullSHAs['repo-1']['notes/brand-new.md']).toBe('new-sha');
   });
 
+  test('shows a Notice when the pull phase fails but still attempts push', async () => {
+    const app = makeMockApp();
+    app.vault.getFiles = jest.fn().mockReturnValue([]);
+    const client = {
+      listFiles: jest.fn().mockRejectedValue(new Error('Server returned a non-JSON response (HTTP 502)')),
+      sync: jest.fn().mockResolvedValue({ commit_sha: 'abc1234567890' }),
+    };
+    const settings = makeSettings();
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    const notices = (jest.requireMock('obsidian') as { __notices: string[] }).__notices;
+    expect(notices.some(n => n.includes('pull failed') && n.includes('502'))).toBe(true);
+  });
+
   test('still skips pulling over unsynced local edits when the file exists locally', async () => {
     const app = makeMockApp({ 'Published/notes/edited.md': true });
     app.vault.read = jest.fn().mockResolvedValue('# Locally edited content');

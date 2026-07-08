@@ -237,7 +237,9 @@ export class SyncManager {
 
       if (pulled > 0) notice.setMessage(`PubObs: pulled ${pulled} note(s), pushing local changes…`);
     } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
       console.error('[PubObs] pull phase failed:', e);
+      new Notice(`PubObs: pull failed — ${reason}. Continuing with local push…`, 10000);
     }
 
     // ── Push phase ────────────────────────────────────────────────────────────
@@ -462,8 +464,6 @@ export class SyncManager {
 
     const mdContent = injectPluginFrontmatter(content, pluginsMeta);
 
-    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder, this.settings.noteKeys?.[repoId]);
-
     // ── Backend-authoritative encryption key ────────────────────────────────────
     // Prefer a cached key from an earlier sync's response. For a brand-new
     // note (no cached key yet — first sync ever, or plugin data was
@@ -471,6 +471,10 @@ export class SyncManager {
     // this file's payload: the main sync request can't mint it for us here,
     // since by the time the server would generate it, the client already
     // needs to have sent the (necessarily already-encrypted) content.
+    //
+    // Fetch the key *before* rendering so a backend/key failure skips the
+    // expensive (and potentially crash-prone) MarkdownRenderer pass for
+    // this file — per-file isolation then reports it as a skip Notice.
     if (!this.settings.noteKeys) this.settings.noteKeys = {};
     if (!this.settings.noteKeys[repoId]) this.settings.noteKeys[repoId] = {};
     let keyB64 = this.settings.noteKeys[repoId][repoPath];
@@ -478,6 +482,8 @@ export class SyncManager {
       keyB64 = await this.client.getNoteKey(repoId, repoPath);
       this.settings.noteKeys[repoId][repoPath] = keyB64;
     }
+
+    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder, this.settings.noteKeys?.[repoId]);
 
     const encryptedHTML = await encryptHTML(html, base64urlDecode(keyB64));
 

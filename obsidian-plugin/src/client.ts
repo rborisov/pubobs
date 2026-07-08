@@ -20,6 +20,11 @@ export interface SyncAsset {
   content: string;    // base64-encoded binary
 }
 
+/** URL-encode each path segment so Cyrillic/spaces survive routing intact. */
+export function encodeNotePath(notePath: string): string {
+  return notePath.split('/').map(encodeURIComponent).join('/');
+}
+
 export class BackendClient {
   constructor(private settings: PubObsSettings, private saveSettings: () => Promise<void>) {}
 
@@ -148,7 +153,7 @@ export class BackendClient {
   // incorrectly make the note public just to learn one).
   async getNoteKey(repoId: string, notePath: string): Promise<string> {
     const resp = await this.request<{ key: string }>({
-      url: `${this.baseUrl}/api/repos/${repoId}/notes/${notePath}/key`,
+      url: `${this.baseUrl}/api/repos/${repoId}/notes/${encodeNotePath(notePath)}/key`,
       method: 'POST',
     });
     return resp.key;
@@ -158,7 +163,7 @@ export class BackendClient {
     repoId: string, notePath: string, mode: 'restricted' | 'public',
   ): Promise<{ shared: boolean; path: string; key?: string }> {
     return this.request({
-      url: `${this.baseUrl}/api/repos/${repoId}/notes/${notePath}/share`,
+      url: `${this.baseUrl}/api/repos/${repoId}/notes/${encodeNotePath(notePath)}/share`,
       method: 'POST',
       contentType: 'application/json',
       body: JSON.stringify({ mode }),

@@ -6,7 +6,7 @@ jest.mock('obsidian', () => ({
   requestUrl: (...args: any[]) => mockRequestUrl(...args),
 }));
 
-import { BackendClient } from '../src/client';
+import { BackendClient, encodeNotePath } from '../src/client';
 import { DEFAULT_SETTINGS } from '../src/types';
 import type { PubObsSettings } from '../src/types';
 
@@ -153,5 +153,23 @@ describe('BackendClient', () => {
     expect(result).toHaveLength(2);
     expect(result[0].path).toBe('notes/foo.md');
     expect(result[0].sha).toBe('abc123');
+  });
+
+  test('encodeNotePath percent-encodes each segment but keeps slashes', () => {
+    expect(encodeNotePath('notes/foo.md')).toBe('notes/foo.md');
+    expect(encodeNotePath('знания/обзор.md')).toBe(
+      '%D0%B7%D0%BD%D0%B0%D0%BD%D0%B8%D1%8F/%D0%BE%D0%B1%D0%B7%D0%BE%D1%80.md',
+    );
+  });
+
+  test('getNoteKey URL-encodes non-ASCII path segments', async () => {
+    mockRequestUrl.mockResolvedValue(mockResp(200, { key: 'abc' }));
+    await client.getNoteKey('repo-1', 'знания/обзор.md');
+    expect(mockRequestUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'http://localhost:8080/api/repos/repo-1/notes/%D0%B7%D0%BD%D0%B0%D0%BD%D0%B8%D1%8F/%D0%BE%D0%B1%D0%B7%D0%BE%D1%80.md/key',
+        method: 'POST',
+      }),
+    );
   });
 });
