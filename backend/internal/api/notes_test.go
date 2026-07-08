@@ -214,3 +214,50 @@ func TestPubListNotes_sharedNoteSurvivesReconcileWithoutGitPath(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(noteRR, noteReq)
 	require.Equal(t, http.StatusOK, noteRR.Code, noteRR.Body.String())
 }
+
+// TestPubListNotes_unsharedEncryptedNoteSurvivesReconcileWithoutGitPath
+// verifies that after "Stop sharing", a note with a tracked encryption key
+// is NOT pruned from the DB when its path is absent from git — repo members
+// must still be able to open it (or at least not lose the row on list load).
+func TestPubListNotes_unsharedEncryptedNoteSurvivesReconcileWithoutGitPath(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "editor@x.com", "Editor")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor"))
+
+	hello, err := deps.Store.UpsertNote(ctx, "r1", "hello.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, hello.ID, "", "{}", "u1", "sha1"))
+
+	sharedPath := "3gpp/38211-konspekt.md"
+	shared, err := deps.Store.UpsertNote(ctx, "r1", sharedPath)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, shared.ID, "", "{}", "u1", "sha2"))
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, shared.ID)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.SetNoteShared(ctx, shared.ID, true, key))
+
+	// Stop sharing — shared_publicly=false but encryption_key remains.
+	unshareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/"+sharedPath+"/unshare", strings.NewReader(""))
+	unshareReq.Header.Set("Authorization", bearerHeader(t, deps, "u1", "editor@x.com", false))
+	unshareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(unshareRR, unshareReq)
+	require.Equal(t, http.StatusOK, unshareRR.Code, unshareRR.Body.String())
+
+	listReq := httptest.NewRequest("GET", "/pub/r1", nil)
+	listRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(listRR, listReq)
+	require.Equal(t, http.StatusOK, listRR.Code, listRR.Body.String())
+
+	gotShared, err := deps.Store.GetNote(ctx, "r1", sharedPath)
+	require.NoError(t, err)
+	require.NotNil(t, gotShared, "unshared encrypted note must survive list reconcile")
+	require.False(t, gotShared.SharedPublicly)
+	require.NotEmpty(t, gotShared.EncryptionKey)
+}

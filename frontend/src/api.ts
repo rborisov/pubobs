@@ -344,6 +344,9 @@ export interface PubNoteDetail {
   synced_at: string;
   backlinks: Array<{ path: string; title: string }>;
   shared_publicly: boolean;
+  // True when the caller has repo access but the encrypted render blob is
+  // missing (e.g. deleted during share/unshare heal) — re-sync from Obsidian.
+  render_pending?: boolean;
   // "" whenever the caller isn't a real repo member (anonymous guest-open
   // visitor, or a share-link-only visitor) — only "editor"/"admin" should
   // ever see sharing controls.

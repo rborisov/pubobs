@@ -447,6 +447,152 @@ func TestPubShareThenRender_healsPreExistingLegacyBlob(t *testing.T) {
 		"a healed stale blob must read as 'not available' — never serve undecryptable bytes for the client to fail on")
 }
 
+// TestPubShareUnshareThenOpen_authenticatedStillWorks is the core share→open→
+// unshare→open regression: a repo member must always open a note without ?key=
+// regardless of share history, as long as the render blob is healthy.
+func TestPubShareUnshareThenOpen_authenticatedStillWorks(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "editor1", "editor@x.com", "Editor")
+	deps.Store.UpsertUser(ctx, "reader1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "editor1", "editor"))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a2", "r1", "user", "reader1", "reader"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "editor1", "sha1"))
+
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	keyBytes, err := base64.RawURLEncoding.DecodeString(key)
+	require.NoError(t, err)
+	plaintext := []byte("<h1>Share cycle content</h1>")
+	ciphertext := testGCMEncrypt(t, keyBytes, plaintext)
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	// Share publicly.
+	shareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/share", strings.NewReader(`{"mode":"public"}`))
+	shareReq.Header.Set("Authorization", bearerHeader(t, deps, "editor1", "editor@x.com", false))
+	shareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(shareRR, shareReq)
+	require.Equal(t, http.StatusOK, shareRR.Code, shareRR.Body.String())
+
+	// Reader opens without key — must see content.
+	openAsReader := func() string {
+		req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+		req.Header.Set("Authorization", bearerHeader(t, deps, "reader1", "reader@x.com", false))
+		rr := httptest.NewRecorder()
+		api.BuildRouter(deps).ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+		var resp map[string]any
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+		html, _ := resp["html_content"].(string)
+		return html
+	}
+	require.Equal(t, string(plaintext), openAsReader())
+
+	// Stop sharing.
+	unshareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/unshare", strings.NewReader(""))
+	unshareReq.Header.Set("Authorization", bearerHeader(t, deps, "editor1", "editor@x.com", false))
+	unshareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(unshareRR, unshareReq)
+	require.Equal(t, http.StatusOK, unshareRR.Code, unshareRR.Body.String())
+
+	// Reader still opens without key — must still see content (re-encrypted blob).
+	require.Equal(t, string(plaintext), openAsReader())
+
+	// Old share key must no longer grant guest access.
+	guestReq := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md?key="+key, nil)
+	guestRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(guestRR, guestReq)
+	require.Equal(t, http.StatusNotFound, guestRR.Code, "revoked share key must not grant access after unshare")
+}
+
+// TestPubShareUnshareThenOpen_blobHealedSignalsPending covers the case where
+// /share deletes a stale render blob: repo members must not get a blank page
+// or the guest-only placeholder — they get render_pending instead.
+func TestPubShareUnshareThenOpen_blobHealedSignalsPending(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "editor1", "editor@x.com", "Editor")
+	deps.Store.UpsertUser(ctx, "reader1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "editor1", "editor"))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a2", "r1", "user", "reader1", "reader"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "editor1", "sha1"))
+
+	// Legacy blob under an unknown key — /share will heal (delete) it.
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(0xCC)
+	}
+	ciphertext := testGCMEncrypt(t, legacyKey, []byte("<h1>legacy</h1>"))
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	shareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/share", strings.NewReader(`{"mode":"public"}`))
+	shareReq.Header.Set("Authorization", bearerHeader(t, deps, "editor1", "editor@x.com", false))
+	shareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(shareRR, shareReq)
+	require.Equal(t, http.StatusOK, shareRR.Code, shareRR.Body.String())
+
+	unshareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/docs/intro.md/unshare", strings.NewReader(""))
+	unshareReq.Header.Set("Authorization", bearerHeader(t, deps, "editor1", "editor@x.com", false))
+	unshareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(unshareRR, unshareReq)
+	require.Equal(t, http.StatusOK, unshareRR.Code, unshareRR.Body.String())
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "reader1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotContains(t, resp, "html_content", "no content until re-sync")
+	require.Equal(t, true, resp["render_pending"])
+	require.Equal(t, "reader", resp["role"])
+}
+
+// TestPubGetNote_healsPrunedNoteFromGit verifies lazy recovery when reconcile
+// incorrectly deleted a DB row that still exists in git.
+func TestPubGetNote_healsPrunedNoteFromGit(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepoWithFiles(t, bareURL, map[string]string{"healed.md": "# Healed\n\n[[other]]"})
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+
+	// Simulate incorrect prune: note exists in git but DB row was deleted.
+	req := httptest.NewRequest("GET", "/pub/r1/notes/healed.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "Healed", resp["title"])
+
+	got, err := deps.Store.GetNote(ctx, "r1", "healed.md")
+	require.NoError(t, err)
+	require.NotNil(t, got, "open must recreate the pruned DB row from git")
+}
+
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {
 	deps, cacheDir := newTestDepsForPub(t)
 	ctx := context.Background()

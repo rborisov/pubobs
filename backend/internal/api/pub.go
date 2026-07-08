@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -205,6 +206,11 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 
 		note, err := deps.Store.GetNote(r.Context(), repoID, notePath)
+		if note == nil && err == nil {
+			if healed, _ := ensureNoteFromGit(r.Context(), deps, repo, notePath, syncedByFromRequest(r, deps)); healed != nil {
+				note = healed
+			}
+		}
 		if err != nil || note == nil {
 			writeError(w, http.StatusNotFound, "note not found")
 			return
@@ -213,8 +219,14 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "note not found")
 			return
 		}
-		snap, err := deps.Store.GetSnapshot(r.Context(), note.ID)
-		if err != nil || snap == nil {
+		snap, snapErr := deps.Store.GetSnapshot(r.Context(), note.ID)
+		if snap == nil {
+			if healed, _ := ensureNoteFromGit(r.Context(), deps, repo, notePath, syncedByFromRequest(r, deps)); healed != nil {
+				note = healed
+				snap, snapErr = deps.Store.GetSnapshot(r.Context(), note.ID)
+			}
+		}
+		if snapErr != nil || snap == nil {
 			writeError(w, http.StatusNotFound, "snapshot not found")
 			return
 		}
@@ -236,35 +248,8 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		// hasRender reflects whether this note has an encrypted render blob.
-		// A share-link-only visitor (no real repo role, just a matching
-		// note key) must fetch that blob separately from /render and
-		// decrypt it client-side with their own ?key= — the server never
-		// decrypts on their behalf.
-		//
-		// A caller with real repo-level access (pubRepoAccess grants it —
-		// guest-open repo, or an authenticated session with a role here)
-		// already has full standing rights to this note regardless of any
-		// share/key state, exactly as before this feature existed. For
-		// them, the server decrypts the render blob right here and inlines
-		// the plaintext below, just like it does for a legacy pre-encryption
-		// note — this is the ONLY content path for a logged-in repo member
-		// who opens a bare /read/:repoId/:path URL with no ?key=, so it must
-		// never be skipped for them.
-		hasRender := false
-		decryptedHTML, hasDecrypted := "", false
-		if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
-			if data, _ := rstore.Read(repoID, notePath); data != nil {
-				hasRender = true
-				if note.EncryptionKey != "" && pubRepoAccess(r, deps, repoID) != nil {
-					if plaintext, derr := decryptNoteRenderHTML(note.EncryptionKey, data); derr == nil {
-						decryptedHTML, hasDecrypted = plaintext, true
-					} else {
-						fmt.Printf("decrypt render blob %s/%s: %v\n", repoID, notePath, derr)
-					}
-				}
-			}
-		}
+		hasRepoAccess := pubRepoAccess(r, deps, repoID) != nil
+		render := resolveNoteHTML(r.Context(), deps, repoID, notePath, note, snap, hasRepoAccess)
 
 		resp := map[string]any{
 			"id":              note.ID,
@@ -283,21 +268,87 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			"role": callerRepoRole(r, deps, repoID),
 		}
 
-		switch {
-		case hasDecrypted:
-			resp["html_content"] = rewriteRepoID(decryptedHTML, repoID)
-		case !hasRender:
-			// Legacy fallback: notes not yet synced with encryption.
-			htmlContent, _ := deps.Cache.ReadRenderedHTML(repoID, notePath)
-			if htmlContent == "" {
-				htmlContent = snap.HTMLContent
-			}
-			htmlContent = rewriteRepoID(htmlContent, repoID)
-			resp["html_content"] = htmlContent
+		if render.HTMLContent != "" {
+			resp["html_content"] = rewriteRepoID(render.HTMLContent, repoID)
+		}
+		if render.Pending {
+			resp["render_pending"] = true
 		}
 
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// noteHTMLResult is the resolved HTML for handlePubGetNote, plus a flag when
+// a repo member has access but no render is available yet (blob missing or
+// deleted during share/unshare heal — needs an Obsidian re-sync).
+type noteHTMLResult struct {
+	HTMLContent string
+	Pending     bool
+}
+
+// syncedByFromRequest returns the authenticated user's ID when the request
+// carries a valid bearer token, for git-heal snapshot writes.
+func syncedByFromRequest(r *http.Request, deps *Deps) string {
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenStr == "" {
+		return ""
+	}
+	claims, err := auth.VerifyAccessToken(deps.Config.SecretKey, tokenStr)
+	if err != nil {
+		return ""
+	}
+	return claims.UserID
+}
+
+// resolveNoteHTML picks the best available HTML for handlePubGetNote.
+//
+// Share-link-only visitors never get server-side decryption here — they use
+// /render + client-side ?key= decryption. Repo members (hasRepoAccess) always
+// get server-side decrypt when a matching blob exists; when the blob is
+// missing or stale (key mismatch after share/unshare), we heal it away and
+// fall back to legacy snapshot HTML, or signal render_pending when nothing
+// is available until the next Obsidian sync.
+func resolveNoteHTML(ctx context.Context, deps *Deps, repoID, notePath string, note *model.Note, snap *model.NoteSnapshot, hasRepoAccess bool) noteHTMLResult {
+	rstore, rerr := deps.Resolver.RenderStoreFor(ctx, repoID)
+	if rerr == nil {
+		if data, _ := rstore.Read(repoID, notePath); data != nil {
+			if note.EncryptionKey != "" && hasRepoAccess {
+				keyBytes, keyErr := base64.RawURLEncoding.DecodeString(note.EncryptionKey)
+				if keyErr == nil && len(keyBytes) == 32 {
+					plaintext, decryptErr := decryptNoteRenderHTML(note.EncryptionKey, data)
+					if decryptErr == nil {
+						return noteHTMLResult{HTMLContent: plaintext}
+					}
+					// Valid key but blob mismatch — heal away undecryptable bytes.
+					fmt.Printf("decrypt render blob %s/%s: %v\n", repoID, notePath, decryptErr)
+					if delErr := rstore.Delete(repoID, notePath); delErr != nil {
+						fmt.Printf("heal stale render blob delete %s/%s: %v\n", repoID, notePath, delErr)
+					}
+				}
+			} else if !hasRepoAccess {
+				// Share-link visitor: no server-side HTML; client decrypts.
+				return noteHTMLResult{}
+			}
+		}
+	}
+
+	// Legacy fallback: pre-encryption notes, or notes whose render blob was
+	// deleted during share/unshare heal and not yet re-synced.
+	htmlContent := ""
+	if deps.Cache != nil {
+		htmlContent, _ = deps.Cache.ReadRenderedHTML(repoID, notePath)
+	}
+	if htmlContent == "" {
+		htmlContent = snap.HTMLContent
+	}
+	if htmlContent != "" {
+		return noteHTMLResult{HTMLContent: htmlContent}
+	}
+	if hasRepoAccess {
+		return noteHTMLResult{Pending: true}
+	}
+	return noteHTMLResult{}
 }
 
 func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoID, notePath string) {

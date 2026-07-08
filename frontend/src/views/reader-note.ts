@@ -123,6 +123,8 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     }
   } else if (note.html_content) {
     htmlContent = note.html_content;
+  } else if (note.render_pending || (note.role && note.role !== '')) {
+    htmlContent = '<p style="color:#888;font-style:italic">Note content is not yet available. Re-sync this note from Obsidian to refresh it.</p>';
   } else {
     htmlContent = '<p style="color:#888;font-style:italic">Open this note via a shared link to view its content.</p>';
   }
