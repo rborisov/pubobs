@@ -12,8 +12,17 @@ import (
 
 // StartEvictionJob runs the eviction + disk monitoring loop in a goroutine.
 // Cancel ctx to stop the loop.
+//
+// It runs one cycle immediately, before starting the ticker, rather than
+// waiting for the first tick up to CacheCheckInterval (default 1h) later.
+// Without this, the cached system_health row (and thus the admin dashboard,
+// plus historically handleSync's reject decision) would stay empty/stale for
+// up to a full interval after every process start — including right after an
+// operator restarts the container specifically to force a fresh disk check.
 func StartEvictionJob(ctx context.Context, s *store.Store, cache *gitcache.Cache, cfg *config.Config) {
 	go func() {
+		RunEvictionCycle(ctx, s, cache, cfg)
+
 		ticker := time.NewTicker(cfg.CacheCheckInterval)
 		defer ticker.Stop()
 		for {
@@ -57,13 +66,7 @@ func RunEvictionCycle(ctx context.Context, s *store.Store, cache *gitcache.Cache
 		log.Printf("eviction: disk usage check failed: %v", err)
 		return
 	}
-	const critMinBytes = 1 << 30 // 1 GiB — never crit if more than this is free
-	status := "ok"
-	if freePct < cfg.DiskCritPct && freeBytes < critMinBytes {
-		status = "crit"
-	} else if freePct < cfg.DiskWarnPct {
-		status = "warn"
-	}
+	status := gitcache.EvaluateDiskStatus(freeBytes, freePct, cfg.DiskWarnPct, cfg.DiskCritPct)
 	var lastEviction *time.Time
 	if evicted > 0 {
 		lastEviction = &now

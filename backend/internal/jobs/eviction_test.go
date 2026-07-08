@@ -43,3 +43,40 @@ func TestEvictionJob_evictsStaleRepo(t *testing.T) {
 	_, err := os.Stat(repoDir)
 	require.True(t, os.IsNotExist(err), "clone directory should be deleted")
 }
+
+// TestStartEvictionJob_runsImmediatelyOnStartup pins down that the health row
+// (and thus the disk status an operator/admin dashboard would see) is
+// populated right away on process start, not only after the first tick of
+// CacheCheckInterval. Without this, a container restart intended to force a
+// fresh disk check wouldn't actually do so until up to a full interval later
+// — using a 1h interval here means the assertion can only pass if the
+// eviction cycle ran immediately, before the ticker ever fires.
+func TestStartEvictionJob_runsImmediatelyOnStartup(t *testing.T) {
+	d, _ := db.Open(":memory:")
+	defer d.Close()
+	s := store.New(d)
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	cfg := &config.Config{
+		RepoCacheDir:       cacheDir,
+		RepoCacheTTL:       24 * time.Hour,
+		CacheCheckInterval: time.Hour, // long enough that only an immediate run could satisfy this test
+		DiskWarnPct:        20,
+		DiskCritPct:        5,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, err := s.GetHealth(ctx); err == nil {
+		t.Fatal("expected no health row before the job has run")
+	}
+
+	jobs.StartEvictionJob(ctx, s, cache, cfg)
+
+	require.Eventually(t, func() bool {
+		h, err := s.GetHealth(ctx)
+		return err == nil && h != nil
+	}, 2*time.Second, 10*time.Millisecond, "health row should be populated immediately on startup, not after a 1h tick")
+}

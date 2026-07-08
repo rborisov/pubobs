@@ -47,9 +47,19 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		if h, err := deps.Store.GetHealth(r.Context()); err == nil && h.DiskStatus == "crit" {
-			writeError(w, http.StatusInsufficientStorage, "disk critically low — sync rejected")
-			return
+		// Check disk space live rather than trusting the periodically-cached
+		// health row (refreshed at most once per PUBOBS_CACHE_CHECK_INTERVAL,
+		// default 1h): a stale "crit" reading would otherwise keep rejecting
+		// syncs for up to an hour after an operator has already freed up
+		// space. A single statfs call is cheap enough to do on every sync, so
+		// there's no need to trade correctness for cost here. The cached
+		// value is still fine for the admin dashboard's informational health
+		// display, which isn't gating any action.
+		if deps.Cache != nil {
+			if status, _, _, err := deps.Cache.DiskStatus(deps.Config.DiskWarnPct, deps.Config.DiskCritPct); err == nil && status == "crit" {
+				writeError(w, http.StatusInsufficientStorage, "disk critically low — sync rejected")
+				return
+			}
 		}
 
 		var payload struct {

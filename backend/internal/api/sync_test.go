@@ -99,6 +99,40 @@ func TestHandleSync_emptyRepo(t *testing.T) {
 	require.NotEmpty(t, resp["commit_sha"])
 }
 
+// TestHandleSync_staleCritCacheDoesNotBlockHealthySync is the core
+// regression test for a real incident: the periodic eviction job's cached
+// system_health row said "crit" from a stale prior computation (it only
+// refreshes once per PUBOBS_CACHE_CHECK_INTERVAL, default 1h), but the disk
+// is actually healthy right now (the test cache dir is a normal temp dir).
+// handleSync must check disk space live rather than trust that stale cached
+// row, so the sync must succeed here, not be rejected with 507.
+func TestHandleSync_staleCritCacheDoesNotBlockHealthySync(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	// Simulate a stale "crit" reading left behind by a prior eviction cycle,
+	// from back when disk really was low — nothing has refreshed it since.
+	require.NoError(t, deps.Store.UpsertHealth(ctx, 1.0, 100, "crit", nil))
+	h, err := deps.Store.GetHealth(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "crit", h.DiskStatus, "sanity check: stale cache must actually say crit")
+
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{}}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, "sync must not be rejected on stale cached crit status when live disk is healthy: %s", rr.Body.String())
+}
+
 func TestHandleSync_insufficientRole(t *testing.T) {
 	deps := newTestDepsWithCache(t)
 	ctx := context.Background()
