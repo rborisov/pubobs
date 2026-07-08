@@ -45,7 +45,9 @@ func seedBareRepoWithFiles(t *testing.T, bareURL string, files map[string]string
 	}
 	run("clone", bareURL, ".")
 	for path, content := range files {
-		require.NoError(t, os.WriteFile(filepath.Join(work, path), []byte(content), 0644))
+		full := filepath.Join(work, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0755))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0644))
 	}
 	run("add", ".")
 	run("commit", "-m", "initial")
