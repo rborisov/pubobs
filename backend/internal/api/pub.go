@@ -48,9 +48,40 @@ func pubRepoAccess(r *http.Request, deps *Deps, repoID string) *model.Repo {
 	return repo
 }
 
+// pubNoteAccess returns true if the request may access this specific note's
+// content: either because pubRepoAccess already grants repo-level access
+// (guest-open repo, or a valid bearer token with reader+ role — unchanged),
+// or because the note itself is shared_publicly and the request supplies a
+// ?key= query parameter matching note.EncryptionKey. The key comparison
+// uses crypto/subtle.ConstantTimeCompare rather than == since this is a
+// security-sensitive credential check.
+//
+// A repo-level grant always supersedes; a note's key only ever matters when
+// the repo is guest-closed AND that specific note is shared_publicly — see
+// the access-control table in the design doc for the full matrix.
+func pubNoteAccess(r *http.Request, deps *Deps, repo *model.Repo, note *model.Note) bool {
+	if pubRepoAccess(r, deps, repo.ID) != nil {
+		return true
+	}
+	if !note.SharedPublicly {
+		return false
+	}
+	providedKey := r.URL.Query().Get("key")
+	if providedKey == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(providedKey), []byte(note.EncryptionKey)) == 1
+}
+
 func handlePubListNotes(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
+		// INVARIANT: this endpoint must ONLY ever use repo-level
+		// pubRepoAccess — NEVER a per-note share key, even if one happens to
+		// be supplied as a ?key= query param. A share-link visitor for one
+		// specific note must never be able to enumerate the rest of the
+		// repo's notes via this endpoint. Do not change this to accept a
+		// note-scoped key without re-reading the access-control design.
 		repo := pubRepoAccess(r, deps, repoID)
 		if repo == nil {
 			writeError(w, http.StatusNotFound, "repo not found")
@@ -109,12 +140,20 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		repoID := chi.URLParam(r, "repoId")
 		notePath := chi.URLParam(r, "*")
 
-		if pubRepoAccess(r, deps, repoID) == nil {
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
 		if strings.HasSuffix(notePath, "/comments") {
+			// Comments stay gated on plain repo-level access, unchanged — a
+			// share-link-only visitor never sees comments/backlinks, per
+			// project decision. Do NOT switch this to pubNoteAccess.
+			if pubRepoAccess(r, deps, repoID) == nil {
+				writeError(w, http.StatusNotFound, "repo not found")
+				return
+			}
 			notePath = strings.TrimSuffix(notePath, "/comments")
 			handlePubComments(w, r, deps, repoID, notePath)
 			return
@@ -122,6 +161,10 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 
 		note, err := deps.Store.GetNote(r.Context(), repoID, notePath)
 		if err != nil || note == nil {
+			writeError(w, http.StatusNotFound, "note not found")
+			return
+		}
+		if !pubNoteAccess(r, deps, repo, note) {
 			writeError(w, http.StatusNotFound, "note not found")
 			return
 		}
@@ -148,7 +191,17 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		hasRender := renderKeyFromFrontmatter(meta.Frontmatter) != ""
+		// hasRender reflects whether this note has an encrypted render blob
+		// (in which case the client must fetch it separately from /render,
+		// with a key if it's accessing via a share link) versus a legacy
+		// note synced before render-blob encryption existed, whose plaintext
+		// HTML the server still caches directly and can inline below.
+		hasRender := false
+		if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
+			if data, _ := rstore.Read(repoID, notePath); data != nil {
+				hasRender = true
+			}
+		}
 
 		resp := map[string]any{
 			"id":             note.ID,
@@ -215,31 +268,29 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "repoId")
 		notePath := chi.URLParam(r, "*")
-		providedKey := r.URL.Query().Get("key")
 
-		if providedKey == "" {
-			writeError(w, http.StatusForbidden, "key required")
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
+			writeError(w, http.StatusNotFound, "render not found")
 			return
 		}
-
 		note, err := deps.Store.GetNote(r.Context(), repoID, notePath)
 		if err != nil || note == nil {
 			writeError(w, http.StatusNotFound, "render not found")
 			return
 		}
-		snap, err := deps.Store.GetSnapshot(r.Context(), note.ID)
-		if err != nil || snap == nil {
-			writeError(w, http.StatusNotFound, "render not found")
-			return
-		}
-		var meta struct {
-			Frontmatter map[string]any `json:"frontmatter"`
-		}
-		_ = json.Unmarshal([]byte(snap.MetadataJSON), &meta)
 
-		expected := renderKeyFromFrontmatter(meta.Frontmatter)
-		if expected == "" || subtle.ConstantTimeCompare([]byte(providedKey), []byte(expected)) != 1 {
-			writeError(w, http.StatusForbidden, "invalid key")
+		if !pubNoteAccess(r, deps, repo, note) {
+			// A key was supplied and checked against a note that IS shared,
+			// but didn't match: 403 (a real credential was rejected). Every
+			// other denial (not shared at all, or no key/token at all) is a
+			// plain 404 instead, so as not to leak whether the note is
+			// currently being shared.
+			if note.SharedPublicly && r.URL.Query().Get("key") != "" {
+				writeError(w, http.StatusForbidden, "invalid key")
+			} else {
+				writeError(w, http.StatusNotFound, "render not found")
+			}
 			return
 		}
 
@@ -262,16 +313,6 @@ func handlePubGetRender(deps *Deps) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	}
-}
-
-func renderKeyFromFrontmatter(fm map[string]any) string {
-	if pubobsURL, _ := fm["pubobs-url"].(string); pubobsURL != "" {
-		if i := strings.LastIndex(pubobsURL, "&"); i != -1 {
-			return pubobsURL[i+1:]
-		}
-	}
-	key, _ := fm["pubobs-render-key"].(string)
-	return key
 }
 
 func handlePubGetAsset(deps *Deps) http.HandlerFunc {

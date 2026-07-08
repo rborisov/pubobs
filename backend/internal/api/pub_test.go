@@ -55,6 +55,125 @@ func TestHandlePubGetAsset_servesFromAssetStoreWhenPresent(t *testing.T) {
 	require.Equal(t, []byte("from-asset-store"), rr.Body.Bytes())
 }
 
+// setupPubAccessTest seeds repo r1 (allow_guest=allowGuest) with reader
+// access for user u1, and note docs/intro.md whose shared_publicly is set
+// to shared with a fixed test key. A render blob is written for the note so
+// "shown" cases can assert a real 200 with real bytes, not just a
+// content-less 404-vs-not-404 distinction.
+func setupPubAccessTest(t *testing.T, allowGuest, shared bool) (deps *api.Deps, key string) {
+	t.Helper()
+	deps, _ = newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", allowGuest))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	key = "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, shared, key))
+
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", []byte("encrypted-blob-bytes")))
+
+	return deps, key
+}
+
+func getPubNote(deps *api.Deps, query string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md"+query, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	return rr
+}
+
+func getPubRender(deps *api.Deps, query string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", "/pub/r1/render/docs/intro.md"+query, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	return rr
+}
+
+func TestPubAccess_guestOpen_noKey_shown(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, true, false)
+	require.Equal(t, http.StatusOK, getPubNote(deps, "").Code)
+	require.Equal(t, http.StatusOK, getPubRender(deps, "").Code)
+}
+
+func TestPubAccess_guestOpen_someKeyPresent_shownKeyIgnored(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, true, false)
+	require.Equal(t, http.StatusOK, getPubNote(deps, "?key=totally-wrong-key").Code)
+	require.Equal(t, http.StatusOK, getPubRender(deps, "?key=totally-wrong-key").Code)
+}
+
+func TestPubAccess_guestClosedNotShared_noKey_hidden(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, false, false)
+	require.Equal(t, http.StatusNotFound, getPubNote(deps, "").Code)
+	require.Equal(t, http.StatusNotFound, getPubRender(deps, "").Code)
+}
+
+func TestPubAccess_guestClosedNotShared_correctKey_stillHidden(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, false)
+	rr := getPubNote(deps, "?key="+key)
+	require.Equal(t, http.StatusNotFound, rr.Code, "key alone must never be sufficient when the note isn't shared")
+	rr2 := getPubRender(deps, "?key="+key)
+	require.Equal(t, http.StatusNotFound, rr2.Code, "key alone must never be sufficient when the note isn't shared")
+}
+
+func TestPubAccess_guestClosedShared_noKey_hidden(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, false, true)
+	require.Equal(t, http.StatusNotFound, getPubNote(deps, "").Code)
+	require.Equal(t, http.StatusNotFound, getPubRender(deps, "").Code)
+}
+
+func TestPubAccess_guestClosedShared_correctKey_shown(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, true)
+	rr := getPubNote(deps, "?key="+key)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	rr2 := getPubRender(deps, "?key="+key)
+	require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+	require.Equal(t, "encrypted-blob-bytes", rr2.Body.String())
+}
+
+func TestPubAccess_guestClosedShared_wrongKey_hidden(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, false, true)
+	require.Equal(t, http.StatusNotFound, getPubNote(deps, "?key=totally-wrong-key").Code)
+	require.Equal(t, http.StatusForbidden, getPubRender(deps, "?key=totally-wrong-key").Code)
+}
+
+func TestPubAccess_guestClosed_validBearerToken_shownRegardlessOfSharedState(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		deps, _ := setupPubAccessTest(t, false, shared)
+
+		req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+		req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+		rr := httptest.NewRecorder()
+		api.BuildRouter(deps).ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+		req2 := httptest.NewRequest("GET", "/pub/r1/render/docs/intro.md", nil)
+		req2.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+		rr2 := httptest.NewRecorder()
+		api.BuildRouter(deps).ServeHTTP(rr2, req2)
+		require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+	}
+}
+
+// TestPubListNotes_rejectsShareKeyOnlyRequest verifies the explicit
+// invariant in handlePubListNotes: a note-scoped share key must never grant
+// access to the repo-level list endpoint, even when it's a valid key for
+// one of the repo's notes.
+func TestPubListNotes_rejectsShareKeyOnlyRequest(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, true)
+	req := httptest.NewRequest("GET", "/pub/r1?key="+key, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code, rr.Body.String())
+}
+
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {
 	deps, cacheDir := newTestDepsForPub(t)
 	ctx := context.Background()
