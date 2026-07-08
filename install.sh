@@ -20,6 +20,11 @@ usage() {
   echo "  (no flags)    Fresh install"
   echo "  --update      Pull latest code, rebuild and restart"
   echo "  --reinstall   Stop everything and reinstall from scratch"
+  echo ""
+  echo "Note: as of this version, an instance admin can also trigger an"
+  echo "equivalent update from the admin UI's Updates page (uses the same"
+  echo "throwaway-clone-and-rebuild approach as this script, no SSH needed)."
+  echo "This CLI path remains fully supported as a fallback/CI-friendly option."
 }
 
 MODE="install"

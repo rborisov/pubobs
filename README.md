@@ -56,6 +56,42 @@ This pulls the latest binary from GitHub, rebuilds the Docker image, and restart
 
 > **Note:** Piping directly to bash (`curl | bash --update`) does not work — save the script first, then run it.
 
+### In-app self-update (admin UI)
+
+Instance admins can also trigger an equivalent update from the **Updates**
+page in the admin UI, without SSHing into the VPS at all:
+
+1. Sign in as an instance admin and open **Updates** in the nav.
+2. Click **Check for updates** to compare the running build against the
+   latest commit on the configured branch (`main` by default).
+3. Click **Apply update**. The server does the same thing `install.sh
+   --update` does under the hood — a throwaway sparse clone of just
+   `backend/Dockerfile`, `backend/docker-compose.yml`, and the binary for
+   the host architecture (no persistent source checkout is kept), then
+   `docker compose up -d --build` to rebuild and restart. Progress and logs
+   stream into the page as it runs.
+
+The container briefly restarts as part of applying the update — the page
+keeps polling and reconnects automatically once the new container is up.
+While an update is applying, the rest of the app shows a maintenance page
+to other visitors (health checks, auth, and the update status endpoint
+itself stay reachable throughout).
+
+This is the same underlying mechanism as the `install.sh --update` CLI
+path above, just triggered from the UI instead of a shell — use whichever
+is more convenient; both remain fully supported. The CLI path is the only
+option for the *very first* install (there's no running app yet to click a
+button in), and remains a useful fallback for scripted/CI-driven deploys
+or if the UI is unreachable for some reason.
+
+**Requirements:** the in-app path needs `docker`/`git` inside the container
+and the host's `/var/run/docker.sock` and install dir bind-mounted in —
+`backend/docker-compose.yml` already sets this up for the default
+`/opt/pubobs` install path. See [Environment
+variables](#environment-variables) for how to point it at a different
+git remote/branch (e.g. a fork), and the note in that section about the
+container running as root as a consequence.
+
 ---
 
 ## Reinstall (preserve data)
@@ -66,6 +102,53 @@ sudo bash /tmp/pubobs-install.sh --reinstall
 ```
 
 You will be asked whether to keep or wipe the database and repo cache. Like `--update`, it prunes leftover Docker images/build cache once the reinstalled container is healthy.
+
+---
+
+## Migrating an existing VPS off the old `develop`/Gogs setup
+
+If your VPS was set up before this update mechanism existed, it's most
+likely still tracking the stale `develop` branch on a self-hosted Gogs
+remote (via a persistent full `git clone` at `/opt/pubobs` from that
+era's `install.sh`), with no knowledge of GitHub or `main` at all.
+
+The good news: **no manual `git remote`/checkout surgery is needed.**
+Current `install.sh`'s `--update` path doesn't consult whatever remote or
+branch the existing `/opt/pubobs/.git` checkout happens to be tracking —
+it always sparse-clones fresh from the hardcoded
+`https://github.com/rborisov/pubobs.git`, branch `main`, into a throwaway
+temp dir, and copies just the 3 files it needs (`Dockerfile`,
+`docker-compose.yml`, the binary) into place. So simply running the
+*current* installer's update path against that VPS moves it over in one
+step:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rborisov/pubobs/main/install.sh -o /tmp/pubobs-install.sh
+sudo bash /tmp/pubobs-install.sh --update
+```
+
+This pulls in the new `docker-compose.yml` (which adds the
+`/var/run/docker.sock` and install-dir bind mounts the in-app updater
+needs) and the new `Dockerfile` (which adds `docker`/`git` to the image
+and drops the non-root user — see the note in [Environment
+variables](#environment-variables)), rebuilds, and restarts. After this
+one-time update, both the CLI (`install.sh --update`) and the admin UI's
+**Updates** page track `main` on GitHub going forward.
+
+The VPS's old `develop`-era `.git` checkout, and whatever other
+now-irrelevant source directories it kept around (this era's
+`install.sh` didn't clean those up the way the current one does), are
+harmless leftover cruft at that point — safe to remove if you want the
+disk space back, but not required:
+
+```bash
+rm -rf /opt/pubobs/.git /opt/pubobs/frontend /opt/pubobs/cmd /opt/pubobs/internal \
+       /opt/pubobs/go.mod /opt/pubobs/go.sum 2>/dev/null || true
+```
+
+(Exact leftover paths depend on how old that VPS's initial install was;
+`ls /opt/pubobs` first if unsure, and never remove `backend/.env` or
+`backend/data/`.)
 
 ---
 
@@ -137,7 +220,30 @@ PUBOBS_REPO_CACHE_TTL=24h
 PUBOBS_CACHE_CHECK_INTERVAL=1h
 PUBOBS_DISK_WARN_PCT=20
 PUBOBS_DISK_CRIT_PCT=5
+
+# In-app self-update (admin UI "Updates" page) — optional, defaults shown
+PUBOBS_UPDATE_REPO_URL=https://github.com/rborisov/pubobs.git
+PUBOBS_UPDATE_BRANCH=main
+PUBOBS_UPDATE_INSTALL_DIR=/opt/pubobs   # must match the real path on the host — see note below
 ```
+
+> **Note on `PUBOBS_UPDATE_INSTALL_DIR`:** the in-app updater runs
+> `docker compose` from *inside* the container, against the *host's*
+> Docker daemon (via the `/var/run/docker.sock` bind mount in
+> `docker-compose.yml`). For the file paths it passes to `docker compose`
+> to resolve correctly on the host, the container-internal path
+> (`/opt/pubobs`, via the `..:/opt/pubobs` bind mount) must be identical to
+> the real path on the host — which is exactly why `install.sh` always
+> installs to `/opt/pubobs` and why this variable defaults to the same
+> path. Don't change it unless you also relocate the actual install dir
+> and update the bind mount to match.
+>
+> Because it needs `docker.sock` access to rebuild/restart itself, the
+> container image runs as **root** rather than the unprivileged user
+> earlier revisions used — a non-root user would need docker-group
+> membership to use the socket anyway, which is root-equivalent on the
+> host, so the separation wouldn't add real protection once that mount is
+> present.
 
 After editing `.env`, restart the container:
 
