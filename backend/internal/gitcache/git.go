@@ -15,21 +15,68 @@ import (
 	"github.com/pubobs/backend/internal/model"
 )
 
-// DefaultGitOpTimeout bounds how long any single network git operation
-// (clone/fetch/push) may run before it is killed and reported as a failure.
+// DefaultGitCloneTimeout bounds how long a full/initial clone (Clone) may
+// run before it is killed and reported as a failure.
 //
-// Without this, a stalled remote — e.g. a git server that accepts the TCP/TLS
-// connection and then never responds to (or silently drops) an unauthenticated
-// or badly-authenticated smart-HTTP request instead of returning a fast 401 —
-// leaves the underlying `git` subprocess blocked on a socket read with no
-// timeout of its own, bounded only by whatever the OS/kernel's TCP defaults
-// happen to be (which can be tens of seconds to several minutes, and is not
-// something this codebase controls or can rely on). 25s is generous for the
-// small, --depth=1 markdown-notes clones this app deals with, while still
-// being short enough that a bad-credentials or unreachable-remote failure
-// surfaces to the caller quickly instead of silently eating a large chunk of
-// the request's budget.
-const DefaultGitOpTimeout = 25 * time.Second
+// Without any timeout, a stalled remote — e.g. a git server that accepts the
+// TCP/TLS connection and then never responds to (or silently drops) an
+// unauthenticated or badly-authenticated smart-HTTP request instead of
+// returning a fast 401 — leaves the underlying `git` subprocess blocked on a
+// socket read with no timeout of its own, bounded only by whatever the
+// OS/kernel's TCP defaults happen to be (which can be tens of seconds to
+// several minutes, and is not something this codebase controls or can rely
+// on). That was the original incident this timeout mechanism was built to
+// fix (see DefaultGitFetchTimeout).
+//
+// Clone gets its own, longer budget than FetchReset/push: unlike an
+// incremental fetch (which only ever transfers a small delta and should
+// normally complete in a couple of seconds), a full --depth=1 clone still
+// has to transfer the *entire* current tree for a repo, which can
+// legitimately take well over the original 25s budget for a repo with a
+// large working tree or many/large files — a real production repo hit
+// exactly this: its clone was being killed by the (at the time, shared)
+// 25s timeout after making genuine progress, not because the remote was
+// stalled. 3 minutes is generous enough for that without being unbounded.
+//
+// Trade-off, investigated explicitly rather than assumed away: this timeout
+// is also (still) the only backstop for the *original* stalled-remote/bad-
+// auth-that-never-responds incident, if it happens to occur on a repo's
+// very first clone specifically. classifyGitError (see below) only detects
+// auth failures that the remote actually reports via stderr/HTTP status
+// (401/403, "Authentication failed", etc.) — that detection is instant and
+// completely independent of this timeout, so a remote that *responds* with
+// a rejection is unaffected by this value no matter how long it is (see
+// TestClone_AuthFailureClassifiedFastEvenWithLongCloneTimeout). But a
+// remote that silently hangs and never responds at all cannot be
+// classified any other way than "hit the timeout", so raising this value
+// does mean that narrow case (silent hang, specifically during an initial
+// clone, specifically before any local clone exists yet to fall back on)
+// now takes longer to surface than it did right after today's earlier fix.
+// This is judged an acceptable trade because: (1) FetchReset — used for
+// every request against a repo that has already been cloned once, i.e. the
+// overwhelming majority of traffic — keeps the original short
+// DefaultGitFetchTimeout, so a remote that starts silently hanging on an
+// already-working repo still fails fast; (2) the failure is still bounded
+// (3 minutes, not unbounded) and, combined with the temp-clone+atomic-
+// rename fix in cache.go, no longer risks wedging the repo in a doomed
+// retry loop even in that slower case; (3) an auth-hang on a repo's very
+// first-ever clone is a narrower intersection of conditions than the
+// general case this mechanism guards against.
+const DefaultGitCloneTimeout = 3 * time.Minute
+
+// DefaultGitFetchTimeout bounds how long an incremental network git
+// operation — FetchReset (fetch+reset for an already-cloned repo) or a push
+// (InitializeIfEmpty, AddCommitPush) — may run before it is killed and
+// reported as a failure.
+//
+// These transfer only a small delta (a handful of changed files/commits at
+// most: this app's own doc edits and comment appends), so unlike a full
+// Clone they are expected to be fast every time; a hang here is far more
+// likely to indicate the same "remote accepted the connection but never
+// completed the request" failure mode this whole timeout mechanism was
+// built to catch, so it keeps the original tight 25s budget rather than
+// Clone's longer one.
+const DefaultGitFetchTimeout = 25 * time.Second
 
 // ErrGitAuthFailed signals that a git network operation (clone/fetch/push)
 // failed because the remote rejected (or could not obtain) credentials —
@@ -42,9 +89,10 @@ const DefaultGitOpTimeout = 25 * time.Second
 var ErrGitAuthFailed = errors.New("authentication failed for repo remote — check stored credentials")
 
 // ErrGitOpTimedOut signals that a git network operation did not complete
-// within Timeout. This is reported distinctly from a generic git failure so
-// callers/logs can tell "the remote is slow/unreachable/stuck" apart from
-// "git exited with an error".
+// within its configured timeout (CloneTimeout or FetchTimeout). This is
+// reported distinctly from a generic git failure so callers/logs can tell
+// "the remote is slow/unreachable/stuck" apart from "git exited with an
+// error".
 var ErrGitOpTimedOut = errors.New("git operation timed out")
 
 // authFailurePatterns are substrings (matched case-insensitively) that git
@@ -86,12 +134,35 @@ func classifyGitError(err error) error {
 
 // GitRunner executes system git commands.
 type GitRunner struct {
-	// Timeout bounds network operations (Clone, FetchReset, push). Local-only
-	// operations (rev-parse, ls-files, show, etc.) are never subject to it.
-	Timeout time.Duration
+	// CloneTimeout bounds Clone specifically. Local-only operations
+	// (rev-parse, ls-files, show, etc.) are never subject to either timeout.
+	CloneTimeout time.Duration
+	// FetchTimeout bounds FetchReset and push operations (InitializeIfEmpty,
+	// AddCommitPush) — everything network-facing except the initial Clone.
+	FetchTimeout time.Duration
 }
 
-func NewGitRunner() *GitRunner { return &GitRunner{Timeout: DefaultGitOpTimeout} }
+func NewGitRunner() *GitRunner {
+	return &GitRunner{CloneTimeout: DefaultGitCloneTimeout, FetchTimeout: DefaultGitFetchTimeout}
+}
+
+// cloneTimeout returns the effective Clone timeout, falling back to the
+// default if unset/invalid.
+func (g *GitRunner) cloneTimeout() time.Duration {
+	if g.CloneTimeout > 0 {
+		return g.CloneTimeout
+	}
+	return DefaultGitCloneTimeout
+}
+
+// fetchTimeout returns the effective FetchReset/push timeout, falling back
+// to the default if unset/invalid.
+func (g *GitRunner) fetchTimeout() time.Duration {
+	if g.FetchTimeout > 0 {
+		return g.FetchTimeout
+	}
+	return DefaultGitFetchTimeout
+}
 
 // credentialedURL injects credentials into an HTTPS remote URL if a PAT is provided.
 // credJSON is expected to be `{"username":"...","password":"..."}` — parsed simply.
@@ -155,16 +226,14 @@ func (g *GitRunner) run(dir string, args ...string) (string, error) {
 	return g.runCtx(context.Background(), dir, args...)
 }
 
-// runNetwork runs a git command that talks to a remote, bounded by Timeout.
-// A context deadline exceeded is reported as ErrGitOpTimedOut rather than a
-// bare "signal: killed"/context error, and any error is passed through
-// classifyGitError so credential-rejection failures come back as
-// ErrGitAuthFailed instead of an opaque generic error.
-func (g *GitRunner) runNetwork(dir string, args ...string) (string, error) {
-	timeout := g.Timeout
-	if timeout <= 0 {
-		timeout = DefaultGitOpTimeout
-	}
+// runNetwork runs a git command that talks to a remote, bounded by timeout
+// (the caller resolves this to either cloneTimeout() or fetchTimeout()
+// depending on which operation it's running). A context deadline exceeded is
+// reported as ErrGitOpTimedOut rather than a bare "signal: killed"/context
+// error, and any error is passed through classifyGitError so
+// credential-rejection failures come back as ErrGitAuthFailed instead of an
+// opaque generic error.
+func (g *GitRunner) runNetwork(dir string, timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -212,7 +281,8 @@ func (g *GitRunner) runCtx(ctx context.Context, dir string, args ...string) (str
 func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	authedURL, applied := credentialedURLWithStatus(remoteURL, credJSON)
 	warnIfCredsUnusable(remoteURL, credJSON, applied)
-	_, err := g.runNetwork("", "clone", "--depth=1", "--branch", branch, "--single-branch", authedURL, dir)
+	timeout := g.cloneTimeout()
+	_, err := g.runNetwork("", timeout, "clone", "--depth=1", "--branch", branch, "--single-branch", authedURL, dir)
 	if err != nil {
 		if errors.Is(err, ErrGitAuthFailed) || errors.Is(err, ErrGitOpTimedOut) {
 			// Not worth a second attempt: a bad branch name wouldn't produce
@@ -221,7 +291,7 @@ func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 			return err
 		}
 		firstErr := err
-		_, err = g.runNetwork("", "clone", "--depth=1", authedURL, dir)
+		_, err = g.runNetwork("", timeout, "clone", "--depth=1", authedURL, dir)
 		if err != nil {
 			return fmt.Errorf("clone with branch %q failed (%v); branchless clone also failed: %w", branch, firstErr, err)
 		}
@@ -245,7 +315,7 @@ func (g *GitRunner) IsHealthy(dir string) bool {
 func (g *GitRunner) FetchReset(dir, remoteURL, credJSON, branch string) error {
 	authedURL, applied := credentialedURLWithStatus(remoteURL, credJSON)
 	warnIfCredsUnusable(remoteURL, credJSON, applied)
-	if _, err := g.runNetwork(dir, "fetch", "--depth=1", authedURL, branch); err != nil {
+	if _, err := g.runNetwork(dir, g.fetchTimeout(), "fetch", "--depth=1", authedURL, branch); err != nil {
 		return err
 	}
 	_, err := g.run(dir, "reset", "--hard", "FETCH_HEAD")
@@ -263,13 +333,19 @@ func (g *GitRunner) InitializeIfEmpty(dir, remoteURL, credJSON, branch string) e
 		return fmt.Errorf("initial commit: %w", err)
 	}
 	authedURL := credentialedURL(remoteURL, credJSON)
-	if _, err := g.runNetwork(dir, "push", authedURL, "HEAD:"+branch); err != nil {
+	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
 		return fmt.Errorf("initial push: %w", err)
 	}
 	return nil
 }
 
-// AddCommitPush stages all changes, commits, pushes, and returns the commit SHA.
+// AddCommitPush stages all changes, commits, pushes, and returns the commit
+// SHA. Used both for note syncs and for AppendComment (posting a single
+// comment). Both push a small incremental diff (edited/added markdown files,
+// or one appended comment block) on top of an already-cloned repo — the same
+// small-and-fast size/timing profile as FetchReset — so this shares
+// fetchTimeout() rather than warranting its own budget the way the initial
+// Clone does.
 func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message string) (string, error) {
 	if _, err := g.run(dir, "add", "-A"); err != nil {
 		return "", err
@@ -282,7 +358,7 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message stri
 		return "", err
 	}
 	authedURL := credentialedURL(remoteURL, credJSON)
-	if _, err := g.runNetwork(dir, "push", authedURL, "HEAD:"+branch); err != nil {
+	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
 		return "", err
 	}
 	return g.run(dir, "rev-parse", "HEAD")

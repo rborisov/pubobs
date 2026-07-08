@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -67,7 +68,7 @@ func TestClone_TimesOutFastInsteadOfHangingOnStalledRemote(t *testing.T) {
 	srv := newStalledGitServer(t, &requests)
 
 	g := gitcache.NewGitRunner()
-	g.Timeout = 500 * time.Millisecond
+	g.CloneTimeout = 500 * time.Millisecond
 
 	cloneDir := t.TempDir()
 	start := time.Now()
@@ -101,7 +102,7 @@ func TestFetchReset_TimesOutFastInsteadOfHangingOnStalledRemote(t *testing.T) {
 
 	var requests atomic.Int32
 	srv := newStalledGitServer(t, &requests)
-	g.Timeout = 500 * time.Millisecond
+	g.FetchTimeout = 500 * time.Millisecond
 
 	start := time.Now()
 	err := g.FetchReset(cloneDir, srv.URL+"/remote.git", "", "main")
@@ -271,6 +272,83 @@ func TestClone_WrongPasswordFailsFastWithClearAuthError(t *testing.T) {
 	require.ErrorIs(t, err, gitcache.ErrGitAuthFailed)
 }
 
+// TestClone_UsesCloneTimeoutNotFetchTimeout is a regression test for the
+// split introduced to fix the 494ca9da self-reinforcing-timeout incident:
+// Clone must be bounded by CloneTimeout, not FetchTimeout, even when the two
+// are configured very differently.
+func TestClone_UsesCloneTimeoutNotFetchTimeout(t *testing.T) {
+	var requests atomic.Int32
+	srv := newStalledGitServer(t, &requests)
+
+	g := gitcache.NewGitRunner()
+	g.CloneTimeout = 800 * time.Millisecond
+	g.FetchTimeout = 100 * time.Millisecond // deliberately much shorter than CloneTimeout
+
+	start := time.Now()
+	err := g.Clone(t.TempDir(), srv.URL+"/remote.git", "", "main")
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, gitcache.ErrGitOpTimedOut)
+	require.GreaterOrEqualf(t, elapsed, 800*time.Millisecond,
+		"Clone returned after %s — faster than its own CloneTimeout, meaning it used FetchTimeout instead", elapsed)
+}
+
+// TestFetchReset_UsesFetchTimeoutNotCloneTimeout is the mirror image: an
+// incremental fetch against an already-cloned repo must stay bounded by the
+// short FetchTimeout, not get held up by a long CloneTimeout, since it's
+// FetchReset (used on every subsequent access to a repo) that most needs to
+// keep failing fast on a genuinely stalled/hung remote.
+func TestFetchReset_UsesFetchTimeoutNotCloneTimeout(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	var requests atomic.Int32
+	srv := newStalledGitServer(t, &requests)
+	g.CloneTimeout = 10 * time.Second // deliberately much longer than FetchTimeout
+	g.FetchTimeout = 300 * time.Millisecond
+
+	start := time.Now()
+	err := g.FetchReset(cloneDir, srv.URL+"/remote.git", "", "main")
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, gitcache.ErrGitOpTimedOut)
+	require.Lessf(t, elapsed, 5*time.Second,
+		"FetchReset took %s — it must stay bounded by FetchTimeout, not CloneTimeout", elapsed)
+}
+
+// TestClone_AuthFailureClassifiedFastEvenWithLongCloneTimeout confirms
+// requirement (3) from the incident follow-up: lengthening CloneTimeout to
+// its new, much larger production default (DefaultGitCloneTimeout, 3
+// minutes) must not slow down or mask a fast, clearly-classified auth
+// rejection — classifyGitError pattern-matches the remote's actual
+// response, so it fires as soon as git reports the 401, independent of
+// whatever the overall CloneTimeout is configured to.
+func TestClone_AuthFailureClassifiedFastEvenWithLongCloneTimeout(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	srv := newAuthRequiredGitServer(t, bareURL, "validuser", "validpass")
+	repoURL := srv.URL + "/remote.git"
+
+	g := gitcache.NewGitRunner()
+	g.CloneTimeout = gitcache.DefaultGitCloneTimeout // the new, much longer production default
+	cloneDir := t.TempDir()
+
+	start := time.Now()
+	err := g.Clone(cloneDir, repoURL, "", "main") // no credentials supplied
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, gitcache.ErrGitAuthFailed,
+		"a fast 401 must still be classified as an auth failure, not silently absorbed by a longer CloneTimeout")
+	require.Lessf(t, elapsed, 5*time.Second,
+		"classification took %s — it must fire almost instantly and not be held up by CloneTimeout (%s)", elapsed, gitcache.DefaultGitCloneTimeout)
+}
+
 // TestClone_CorrectCredentialsSucceedsAgainstAuthGatedRemote confirms the
 // auth-gating test server (and the classification logic) doesn't produce
 // false positives: valid stored credentials must still clone successfully.
@@ -290,4 +368,88 @@ func TestClone_CorrectCredentialsSucceedsAgainstAuthGatedRemote(t *testing.T) {
 	files, err := g.ListFiles(cloneDir)
 	require.NoError(t, err)
 	require.Contains(t, files, "hello.md")
+}
+
+// TestGetOrClone_TimedOutFirstCloneLeavesNothingAtLivePath is the regression
+// test for the 494ca9da self-reinforcing-loop incident: a clone that times
+// out partway through must not leave anything (partial or otherwise) at the
+// live repo path, and must not leave a stray staging directory behind
+// either — confirming the temp-clone+atomic-rename fix in
+// Cache.freshClone actually takes effect end-to-end via Cache.ListFiles.
+func TestGetOrClone_TimedOutFirstCloneLeavesNothingAtLivePath(t *testing.T) {
+	var requests atomic.Int32
+	srv := newStalledGitServer(t, &requests)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+	cache.SetGitTimeouts(300*time.Millisecond, 300*time.Millisecond)
+
+	repo := &model.Repo{
+		ID:            "big-repo-that-times-out",
+		RemoteURL:     srv.URL + "/remote.git",
+		DefaultBranch: "main",
+	}
+
+	_, err := cache.ListFiles(context.Background(), repo, "")
+	require.Error(t, err)
+	require.ErrorIs(t, err, gitcache.ErrGitOpTimedOut)
+
+	liveDir := filepath.Join(cacheDir, repo.ID)
+	_, statErr := os.Stat(liveDir)
+	require.Truef(t, os.IsNotExist(statErr),
+		"a timed-out first clone must leave nothing at the live path, got stat err: %v", statErr)
+
+	// The cache dir must be empty afterwards too — no leftover .tmp-clone
+	// staging directory from the failed attempt.
+	entries, err := os.ReadDir(cacheDir)
+	require.NoError(t, err)
+	require.Emptyf(t, entries, "no stray temp/staging directory should remain after a failed clone, found: %v", entries)
+}
+
+// TestGetOrClone_FailedRecloneOfCorruptedDirLeavesLivePathIntact covers the
+// exact sequence from the incident: an existing local clone fails its
+// IsHealthy sanity check (corrupted/incomplete), the self-heal re-clone
+// attempt is triggered, and — with the remote now stalling — that re-clone
+// also times out. The live path must never be left in a NEW broken state as
+// a side effect of the failed re-clone attempt: with the temp-dir fix, it is
+// simply left exactly as it was found (the pre-existing corrupted content),
+// not wiped to nothing or partially overwritten.
+func TestGetOrClone_FailedRecloneOfCorruptedDirLeavesLivePathIntact(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:            "flaky-repo",
+		RemoteURL:     bareURL,
+		DefaultBranch: "main",
+	}
+
+	_, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err, "initial clone must succeed")
+
+	liveDir := filepath.Join(cacheDir, repo.ID)
+	headPath := filepath.Join(liveDir, ".git", "HEAD")
+	require.NoError(t, os.WriteFile(headPath, []byte("ref: refs/heads/does-not-exist\n"), 0644))
+
+	var requests atomic.Int32
+	srv := newStalledGitServer(t, &requests)
+	repo.RemoteURL = srv.URL + "/remote.git"
+	cache.SetGitTimeouts(300*time.Millisecond, 300*time.Millisecond)
+
+	_, err = cache.ListFiles(context.Background(), repo, "")
+	require.Error(t, err)
+	require.ErrorIs(t, err, gitcache.ErrGitOpTimedOut)
+
+	_, statErr := os.Stat(liveDir)
+	require.NoError(t, statErr, "the live path must still exist after a failed re-clone attempt")
+
+	// Only the one live directory should exist under cacheDir — no leftover
+	// .tmp-clone staging directory from the failed re-clone attempt.
+	entries, err := os.ReadDir(cacheDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "no stray temp/staging directory should remain after a failed re-clone, found: %v", entries)
+	require.Equal(t, repo.ID, entries[0].Name())
 }

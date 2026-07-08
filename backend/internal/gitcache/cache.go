@@ -68,12 +68,13 @@ func NewCache(baseDir string) *Cache {
 	}
 }
 
-// SetGitTimeout overrides how long any single network git operation
-// (clone/fetch/push) may run before it is killed and reported as a failure.
-// Primarily useful for tests; production code can leave this at
-// DefaultGitOpTimeout.
-func (c *Cache) SetGitTimeout(d time.Duration) {
-	c.git.Timeout = d
+// SetGitTimeouts overrides how long Clone (cloneTimeout) and
+// FetchReset/push (fetchTimeout) may each run before being killed and
+// reported as a failure. Pass 0 for either to leave it at its package
+// default (DefaultGitCloneTimeout / DefaultGitFetchTimeout).
+func (c *Cache) SetGitTimeouts(cloneTimeout, fetchTimeout time.Duration) {
+	c.git.CloneTimeout = cloneTimeout
+	c.git.FetchTimeout = fetchTimeout
 }
 
 // recentAuthFailure returns the cached error from a recent auth failure for
@@ -151,6 +152,9 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		err := c.freshClone(dir, repo, credJSON)
+		if err != nil {
+			log.Printf("gitcache: fresh clone for %s failed: %v", repo.ID, err)
+		}
 		c.recordGitOpResult(repo.ID, err)
 		return dir, err
 	}
@@ -162,6 +166,9 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 	if !c.git.IsHealthy(dir) {
 		log.Printf("gitcache: local clone for %s is corrupted/incomplete, re-cloning from scratch", repo.ID)
 		err := c.freshClone(dir, repo, credJSON)
+		if err != nil {
+			log.Printf("gitcache: re-clone for %s failed, live clone left untouched: %v", repo.ID, err)
+		}
 		c.recordGitOpResult(repo.ID, err)
 		return dir, err
 	}
@@ -175,23 +182,79 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 	return dir, nil
 }
 
-// freshClone wipes any existing (corrupted/incomplete) local clone directory
-// and clones the repo from scratch.
+// freshCloneTmpSuffix names the sibling staging directory freshClone clones
+// into before atomically moving it onto the live path. It's a fixed (not
+// randomized) name because freshClone only ever runs with this repo's
+// per-repo lock held (see getOrClone's doc comment), so no two attempts for
+// the same repo ID can ever race on it.
+const freshCloneTmpSuffix = ".tmp-clone"
+
+// freshClone clones the repo into a temporary staging directory next to dir
+// (dir+freshCloneTmpSuffix, deliberately in the same parent directory as dir
+// so the final move is a same-filesystem os.Rename, not a copy) and only
+// replaces dir with it once the clone — and, for a newly-empty remote, the
+// initial push — has fully succeeded.
+//
+// This matters because a clone that fails or is killed partway through
+// (hitting CloneTimeout on a repo whose full clone is legitimately slow,
+// disk exhaustion, a container restart, etc.) must never leave the *live*
+// path worse off than it found it. The previous approach — clone directly
+// into dir, then best-effort os.RemoveAll(dir) if that failed — relied on
+// that cleanup always fully succeeding, and left the live path sitting in a
+// transitional, only-partially-written state for the entire duration of the
+// clone (not just on failure). Worse, for a repo whose full clone can never
+// finish inside the configured timeout, every attempt would repeat the
+// exact same doomed clone/timeout forever with no way to make progress.
+// Staging in a temp dir first means a failed/timed-out attempt only ever
+// leaves the *temp* dir broken (cleaned up below via os.RemoveAll); the live
+// path is never touched until a full clone has already succeeded, so it can
+// never look "corrupted" as a side effect of an interrupted clone — it's
+// simply left as whatever it was before this attempt (a valid previous
+// clone, or nothing, if this was the repo's first-ever clone).
 func (c *Cache) freshClone(dir string, repo *model.Repo, credJSON string) error {
+	tmpDir := dir + freshCloneTmpSuffix
+
+	// A previous attempt that was killed before reaching the rename/cleanup
+	// step below (e.g. the whole process was killed by an OOM/container
+	// restart mid-clone, not just this specific operation timing out) can
+	// leave a stale tmp dir behind. Clear it so every attempt starts from a
+	// clean slate — safe unconditionally, for the same reason clearing
+	// stale *.lock files is: this repo's lock is held for the whole call.
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return fmt.Errorf("remove stale tmp clone dir %s: %w", tmpDir, err)
+	}
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", tmpDir, err)
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			os.RemoveAll(tmpDir)
+		}
+	}()
+
+	if err := c.git.Clone(tmpDir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
+		return fmt.Errorf("clone %s: %w", repo.RemoteURL, err)
+	}
+	if err := c.git.InitializeIfEmpty(tmpDir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
+		return fmt.Errorf("initialize %s: %w", repo.RemoteURL, err)
+	}
+
+	// Only now — with a fully-successful clone sitting in tmpDir — do we
+	// touch the live path at all. os.Rename within the same parent
+	// directory is a single atomic syscall, so once it starts it cannot
+	// leave dir half-written. The brief gap between removing whatever
+	// (possibly corrupted) content previously lived at dir and the rename
+	// can, at worst, leave dir transiently absent if the process is killed
+	// in that exact window — which self-heals via the ordinary
+	// not-yet-cloned path on the next attempt, never as "corrupted".
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove existing clone %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
+	if err := os.Rename(tmpDir, dir); err != nil {
+		return fmt.Errorf("move fresh clone into place %s: %w", dir, err)
 	}
-	if err := c.git.Clone(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("clone %s: %w", repo.RemoteURL, err)
-	}
-	if err := c.git.InitializeIfEmpty(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("initialize %s: %w", repo.RemoteURL, err)
-	}
+	succeeded = true
 	return nil
 }
 
