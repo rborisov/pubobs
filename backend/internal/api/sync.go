@@ -98,6 +98,13 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		// noteKeys carries each synced note's backend-authoritative encryption
+		// key back to the plugin, keyed by the same vault-relative path the
+		// plugin sent — so it always encrypts (and links to) notes using the
+		// key the backend actually has on file, never one it invented
+		// locally. GetOrCreateNoteKey is idempotent, so repeated syncs of the
+		// same note always yield the same key here.
+		noteKeys := make(map[string]string, len(payload.Files))
 		for _, f := range payload.Files {
 			note, err := deps.Store.UpsertNote(r.Context(), repoID, f.Path)
 			if err != nil {
@@ -118,6 +125,11 @@ func handleSync(deps *Deps) http.HandlerFunc {
 				} else {
 					fmt.Printf("resolve render store %s: %v\n", repoID, rerr)
 				}
+			}
+			if key, kerr := deps.Store.GetOrCreateNoteKey(r.Context(), note.ID); kerr == nil {
+				noteKeys[f.Path] = key
+			} else {
+				fmt.Printf("get-or-create note key %s/%s: %v\n", repoID, f.Path, kerr)
 			}
 		}
 
@@ -143,7 +155,10 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)
 
-		writeJSON(w, http.StatusOK, map[string]string{"commit_sha": sha})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"commit_sha": sha,
+			"note_keys":  noteKeys,
+		})
 	}
 }
 

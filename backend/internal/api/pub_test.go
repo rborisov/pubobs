@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -172,6 +173,78 @@ func TestPubListNotes_rejectsShareKeyOnlyRequest(t *testing.T) {
 	rr := httptest.NewRecorder()
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNotFound, rr.Code, rr.Body.String())
+}
+
+// TestPubGetNote_authenticatedSeesRealRole verifies an authenticated repo
+// member sees their real role in the response, and that a note which isn't
+// shared is never misreported as shared_publicly.
+func TestPubGetNote_authenticatedSeesRealRole(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, true, false)
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "reader", resp["role"])
+	require.Equal(t, false, resp["shared_publicly"])
+}
+
+// TestPubGetNote_shareKeyOnlyVisitorSeesGuestRole verifies a visitor who
+// only supplied a valid note-level share key (no bearer token, no real repo
+// role) sees an empty/guest role marker rather than any real role string —
+// they must never be shown editor-only sharing controls.
+func TestPubGetNote_shareKeyOnlyVisitorSeesGuestRole(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, true)
+	rr := getPubNote(deps, "?key="+key)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "", resp["role"])
+	require.Equal(t, true, resp["shared_publicly"])
+}
+
+// TestPubListNotes_reportsRoleAndPerNoteSharedState verifies
+// handlePubListNotes surfaces the caller's real role and each note's
+// shared_publicly state without misreporting an unshared note as shared.
+func TestPubListNotes_reportsRoleAndPerNoteSharedState(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, true, true)
+	req := httptest.NewRequest("GET", "/pub/r1", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp struct {
+		Role  string `json:"role"`
+		Notes []struct {
+			Path           string `json:"path"`
+			SharedPublicly bool   `json:"shared_publicly"`
+		} `json:"notes"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "reader", resp.Role)
+	require.Len(t, resp.Notes, 1)
+	require.Equal(t, "docs/intro.md", resp.Notes[0].Path)
+	require.True(t, resp.Notes[0].SharedPublicly)
+}
+
+// TestPubListNotes_anonymousGuestSeesEmptyRole verifies an anonymous guest
+// on a guest-open repo (no bearer token at all) sees the empty/guest role
+// marker, not a real role string.
+func TestPubListNotes_anonymousGuestSeesEmptyRole(t *testing.T) {
+	deps, _ := setupPubAccessTest(t, true, false)
+	req := httptest.NewRequest("GET", "/pub/r1", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "", resp["role"])
 }
 
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {

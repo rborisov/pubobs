@@ -218,6 +218,76 @@ func TestUnshareNote_noRenderBlob_justRotatesAndFlips(t *testing.T) {
 	require.NotEmpty(t, note.EncryptionKey)
 }
 
+func TestServeNoteKey_mintsWithoutSharing(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	seedNoteForShare(t, deps, "editor1", "editor")
+
+	rr := doShareRequest(t, deps, "editor1", "key", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	key, _ := resp["key"].(string)
+	require.NotEmpty(t, key)
+
+	note, err := deps.Store.GetNote(context.Background(), "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Equal(t, key, note.EncryptionKey)
+	require.False(t, note.SharedPublicly, "/key must never flip shared_publicly on")
+
+	// Idempotent: calling again returns the same key.
+	rr2 := doShareRequest(t, deps, "editor1", "key", "")
+	require.Equal(t, http.StatusOK, rr2.Code)
+	var resp2 map[string]any
+	require.NoError(t, json.NewDecoder(rr2.Body).Decode(&resp2))
+	require.Equal(t, key, resp2["key"])
+}
+
+// TestServeNoteKey_createsNoteIfMissing exercises the very-first-sync case
+// the plugin relies on: a note that has never been synced (no row in
+// `notes` yet) still gets a usable key rather than a 404, since /key must be
+// callable BEFORE the main sync request creates the note.
+func TestServeNoteKey_createsNoteIfMissing(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "editor1", "editor1@x.com", "Editor")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r.git", "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "editor1", "editor")
+	// Note deliberately never created (simulates a brand-new file).
+
+	rr := doShareRequest(t, deps, "editor1", "key", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotEmpty(t, resp["key"])
+
+	note, err := deps.Store.GetNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NotNil(t, note)
+	require.False(t, note.SharedPublicly)
+}
+
+func TestServeNoteKey_roleEnforcement(t *testing.T) {
+	for _, tc := range []struct {
+		role       string
+		wantStatus int
+	}{
+		{"reader", http.StatusForbidden},
+		{"commentator", http.StatusForbidden},
+		{"editor", http.StatusOK},
+		{"admin", http.StatusOK},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			deps := newTestDepsForShare(t)
+			seedNoteForShare(t, deps, "u1", tc.role)
+
+			rr := doShareRequest(t, deps, "u1", "key", "")
+			require.Equal(t, tc.wantStatus, rr.Code, rr.Body.String())
+		})
+	}
+}
+
 func TestShareUnshare_roleEnforcement(t *testing.T) {
 	for _, tc := range []struct {
 		role       string

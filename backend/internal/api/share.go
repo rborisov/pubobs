@@ -77,6 +77,44 @@ func serveShareNote(w http.ResponseWriter, r *http.Request, deps *Deps, claims *
 	}
 }
 
+// serveNoteKey handles POST /api/repos/{id}/notes/*/key, gated on
+// editor-or-higher role for the repo. It exists purely so the Obsidian
+// plugin can learn a brand-new note's encryption key BEFORE it can send that
+// note's (already client-side-encrypted) content in the main sync request —
+// a chicken-and-egg problem /share can't solve, since its "restricted" mode
+// deliberately never returns a key, and its "public" mode would incorrectly
+// flip shared_publicly on just to learn a key. This endpoint does neither:
+// it only ever mints/returns the key, never touching shared_publicly.
+//
+// Unlike /share and /unshare, the note may not exist yet — this is called
+// for a note's very first sync, before any note row exists for it — so this
+// upserts the note (by path) rather than 404ing if it's missing.
+func serveNoteKey(w http.ResponseWriter, r *http.Request, deps *Deps, claims *auth.AccessClaims, repoID, notePath string) {
+	repo, err := deps.Store.GetRepo(r.Context(), repoID)
+	if err != nil || repo == nil {
+		writeError(w, http.StatusNotFound, "repo not found")
+		return
+	}
+	if err := requireRepoRole(r.Context(), deps, claims, repoID, "editor"); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
+	note, err := deps.Store.UpsertNote(r.Context(), repoID, notePath)
+	if err != nil || note == nil {
+		writeError(w, http.StatusInternalServerError, "note upsert failed")
+		return
+	}
+
+	key, err := deps.Store.GetOrCreateNoteKey(r.Context(), note.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "key generation failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"key": key})
+}
+
 // serveUnshareNote handles POST /api/repos/{id}/notes/*/unshare, gated on
 // editor-or-higher role for the repo. Revocation is instant and
 // unconditional (no grace period): it always mints a brand new key, and if

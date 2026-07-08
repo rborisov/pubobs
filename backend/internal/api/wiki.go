@@ -58,7 +58,7 @@ func handleNoteGet(deps *Deps) http.HandlerFunc {
 }
 
 // handleNotePost dispatches POST /api/repos/{id}/notes/* based on path suffix
-// (/comments, /share, /unshare).
+// (/comments, /share, /unshare, /key).
 func handleNotePost(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
@@ -72,6 +72,8 @@ func handleNotePost(deps *Deps) http.HandlerFunc {
 			serveShareNote(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/share"))
 		case strings.HasSuffix(notePath, "/unshare"):
 			serveUnshareNote(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/unshare"))
+		case strings.HasSuffix(notePath, "/key"):
+			serveNoteKey(w, r, deps, claims, repoID, strings.TrimSuffix(notePath, "/key"))
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}

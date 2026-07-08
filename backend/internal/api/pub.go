@@ -48,6 +48,36 @@ func pubRepoAccess(r *http.Request, deps *Deps, repoID string) *model.Repo {
 	return repo
 }
 
+// callerRepoRole returns the caller's real repo role ("reader" | "commentator"
+// | "editor" | "admin"), independent of whether the request's access to the
+// current resource was actually granted via that role. It returns "" for any
+// caller without a real repo membership: no bearer token at all, an invalid
+// one, or a valid one with no access on this repo. That "" is deliberately
+// used as the "guest" sentinel throughout the pub handlers below — it covers
+// both true anonymous guest-open visitors AND share-link-only visitors (who
+// may hold no token, or an unrelated valid token that just doesn't grant them
+// a role here), so the frontend can use a single check ("role is editor or
+// admin") to decide whether to show sharing controls, without ever mistaking
+// a share-link visit for real repo membership.
+func callerRepoRole(r *http.Request, deps *Deps, repoID string) string {
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenStr == "" {
+		return ""
+	}
+	claims, err := auth.VerifyAccessToken(deps.Config.SecretKey, tokenStr)
+	if err != nil {
+		return ""
+	}
+	if claims.IsAdmin {
+		return "admin"
+	}
+	role, err := deps.Store.GetUserRole(r.Context(), claims.UserID, repoID)
+	if err != nil {
+		return ""
+	}
+	return role
+}
+
 // pubNoteAccess returns true if the request may access this specific note's
 // content: either because pubRepoAccess already grants repo-level access
 // (guest-open repo, or a valid bearer token with reader+ role — unchanged),
@@ -94,11 +124,12 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 		}
 
 		type noteItem struct {
-			ID       string   `json:"id"`
-			Path     string   `json:"path"`
-			Title    string   `json:"title"`
-			Tags     []string `json:"tags"`
-			SyncedAt string   `json:"synced_at"`
+			ID             string   `json:"id"`
+			Path           string   `json:"path"`
+			Title          string   `json:"title"`
+			Tags           []string `json:"tags"`
+			SyncedAt       string   `json:"synced_at"`
+			SharedPublicly bool     `json:"shared_publicly"`
 		}
 
 		items := make([]noteItem, 0, len(notes))
@@ -120,17 +151,25 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 				tags = []string{}
 			}
 			items = append(items, noteItem{
-				ID:       n.ID,
-				Path:     n.Path,
-				Title:    noteTitle(n.Path, snap),
-				Tags:     tags,
-				SyncedAt: syncedAt,
+				ID:             n.ID,
+				Path:           n.Path,
+				Title:          noteTitle(n.Path, snap),
+				Tags:           tags,
+				SyncedAt:       syncedAt,
+				SharedPublicly: n.SharedPublicly,
 			})
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"repo":  map[string]string{"id": repo.ID, "name": repo.Name},
 			"notes": items,
+			// "" (guest) whenever the caller isn't a real repo member — see
+			// callerRepoRole. This endpoint is only ever reached via
+			// pubRepoAccess (repo-level access), never a note-scoped share
+			// key, so "guest" here always means "anonymous on a guest-open
+			// repo", never "share-link-only visitor" (see the invariant note
+			// above on repoID/repo access).
+			"role": callerRepoRole(r, deps, repoID),
 		})
 	}
 }
@@ -204,14 +243,20 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 
 		resp := map[string]any{
-			"id":             note.ID,
-			"path":           note.Path,
-			"title":          noteTitle(notePath, snap),
-			"tags":           meta.Tags,
-			"frontmatter":    meta.Frontmatter,
-			"git_commit_sha": snap.GitCommitSHA,
-			"synced_at":      snap.SyncedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			"backlinks":      bl,
+			"id":              note.ID,
+			"path":            note.Path,
+			"title":           noteTitle(notePath, snap),
+			"tags":            meta.Tags,
+			"frontmatter":     meta.Frontmatter,
+			"git_commit_sha":  snap.GitCommitSHA,
+			"synced_at":       snap.SyncedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			"backlinks":       bl,
+			"shared_publicly": note.SharedPublicly,
+			// "" (guest) here covers BOTH an anonymous guest-open visitor AND
+			// a share-link-only visitor with no real repo role — either way,
+			// the frontend must not show editor-only sharing controls. See
+			// callerRepoRole's doc comment for the full rationale.
+			"role": callerRepoRole(r, deps, repoID),
 		}
 
 		if !hasRender {
