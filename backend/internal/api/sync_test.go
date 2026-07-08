@@ -28,6 +28,11 @@ func newBareRepo(t *testing.T) string {
 
 func seedBareRepo(t *testing.T, bareURL string) {
 	t.Helper()
+	seedBareRepoWithFiles(t, bareURL, map[string]string{"hello.md": "# Hello"})
+}
+
+func seedBareRepoWithFiles(t *testing.T, bareURL string, files map[string]string) {
+	t.Helper()
 	work := t.TempDir()
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
@@ -39,7 +44,9 @@ func seedBareRepo(t *testing.T, bareURL string) {
 		require.NoError(t, cmd.Run())
 	}
 	run("clone", bareURL, ".")
-	os.WriteFile(filepath.Join(work, "hello.md"), []byte("# Hello"), 0644)
+	for path, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(work, path), []byte(content), 0644))
+	}
 	run("add", ".")
 	run("commit", "-m", "initial")
 	run("push", "origin", "HEAD:main")
