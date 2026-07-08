@@ -157,3 +157,60 @@ func TestPubListNotes_deletedViaSyncNotListed(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, gotNote, "deleted note DB row must be gone")
 }
+
+// TestPubListNotes_sharedNoteSurvivesReconcileWithoutGitPath verifies that
+// reconcileNotesWithGit hides a shared note from the list when its path is
+// absent from git, but does NOT delete the DB row — a direct share-link
+// visitor must still reach handlePubGetNote afterward. Before this guard,
+// loading the reader list could prune the note and permanently break an
+// already-issued ?key= link.
+func TestPubListNotes_sharedNoteSurvivesReconcileWithoutGitPath(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "syncer@x.com", "Syncer")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+
+	// hello.md is in git; shared.md exists only in the DB (stale row).
+	hello, err := deps.Store.UpsertNote(ctx, "r1", "hello.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, hello.ID, "", "{}", "u1", "sha1"))
+
+	sharedPath := "3gpp/38211-konspekt.md"
+	shared, err := deps.Store.UpsertNote(ctx, "r1", sharedPath)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, shared.ID, "", "{}", "u1", "sha2"))
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, shared.ID, true, key))
+
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", sharedPath, []byte("encrypted-blob-bytes")))
+
+	listReq := httptest.NewRequest("GET", "/pub/r1", nil)
+	listRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(listRR, listReq)
+	require.Equal(t, http.StatusOK, listRR.Code, listRR.Body.String())
+
+	var listResp struct {
+		Notes []struct {
+			Path string `json:"path"`
+		} `json:"notes"`
+	}
+	require.NoError(t, json.NewDecoder(listRR.Body).Decode(&listResp))
+	require.Len(t, listResp.Notes, 1, "shared note missing from git must be hidden from list")
+	require.Equal(t, "hello.md", listResp.Notes[0].Path)
+
+	gotShared, err := deps.Store.GetNote(ctx, "r1", sharedPath)
+	require.NoError(t, err)
+	require.NotNil(t, gotShared, "shared note row must survive list reconcile")
+
+	noteReq := httptest.NewRequest("GET", "/pub/r1/notes/"+sharedPath+"?key="+key, nil)
+	noteRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(noteRR, noteReq)
+	require.Equal(t, http.StatusOK, noteRR.Code, noteRR.Body.String())
+}

@@ -141,6 +141,40 @@ func TestPubAccess_guestClosedShared_correctKey_shown(t *testing.T) {
 	require.Equal(t, "encrypted-blob-bytes", rr2.Body.String())
 }
 
+// TestPubAccess_guestClosedShared_nestedPath_correctKey_shown covers the
+// reported production URL shape (#/read/:repoId/3gpp/foo.md?key=...) where
+// the note lives in a subfolder — chi must receive the full path and
+// pubNoteAccess must honour the share key.
+func TestPubAccess_guestClosedShared_nestedPath_correctKey_shown(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+
+	notePath := "3gpp/38211-konspekt.md"
+	note, err := deps.Store.UpsertNote(ctx, "r1", notePath)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "u1", "sha1"))
+
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", notePath, []byte("encrypted-blob-bytes")))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/"+notePath+"?key="+key, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	renderReq := httptest.NewRequest("GET", "/pub/r1/render/"+notePath+"?key="+key, nil)
+	renderRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(renderRR, renderReq)
+	require.Equal(t, http.StatusOK, renderRR.Code, renderRR.Body.String())
+}
+
 func TestPubAccess_guestClosedShared_wrongKey_hidden(t *testing.T) {
 	deps, _ := setupPubAccessTest(t, false, true)
 	require.Equal(t, http.StatusNotFound, getPubNote(deps, "?key=totally-wrong-key").Code)

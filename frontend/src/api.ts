@@ -374,9 +374,14 @@ export async function pubListNotes(repoId: string): Promise<PubListNotesResponse
   return json(await pubFetch(`/pub/${repoId}`));
 }
 
+/** URL-encode each path segment so Cyrillic/spaces survive routing intact. */
+export function encodeNotePath(notePath: string): string {
+  return notePath.split('/').map(encodeURIComponent).join('/');
+}
+
 export async function pubGetNote(repoId: string, notePath: string, key?: string): Promise<PubNoteDetail> {
   const qs = key ? `?key=${encodeURIComponent(key)}` : '';
-  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}${qs}`));
+  return json(await pubFetch(`/pub/${repoId}/notes/${encodeNotePath(notePath)}${qs}`));
 }
 
 export type ShareMode = 'restricted' | 'public';
@@ -415,7 +420,7 @@ export interface PubComment {
 }
 
 export async function pubListComments(repoId: string, notePath: string): Promise<PubComment[]> {
-  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}/comments`));
+  return json(await pubFetch(`/pub/${repoId}/notes/${encodeNotePath(notePath)}/comments`));
 }
 
 export async function addComment(repoId: string, notePath: string, body: string, noteCommitSha: string): Promise<void> {

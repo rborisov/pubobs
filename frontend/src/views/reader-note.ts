@@ -115,7 +115,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   let htmlContent: string;
   if (effectiveKey) {
     try {
-      const renderURL = `/pub/${repoId}/render/${notePath.split('/').map(encodeURIComponent).join('/')}?key=${effectiveKey}`;
+      const renderURL = `/pub/${repoId}/render/${notePath.split('/').map(encodeURIComponent).join('/')}?key=${encodeURIComponent(effectiveKey)}`;
       htmlContent = await decryptRenderBlob(renderURL, effectiveKey);
     } catch (e) {
       console.error('[PubObs] decryption failed:', e);

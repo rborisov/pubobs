@@ -38,6 +38,14 @@ func reconcileNotesWithGit(ctx context.Context, deps *Deps, repo *model.Repo, no
 			filtered = append(filtered, n)
 			continue
 		}
+		// A publicly shared note must stay in the DB even when git
+		// reconcile hasn't caught up (or transiently disagrees with the
+		// DB). List endpoints hide it below, but handlePubGetNote still
+		// needs the row so a direct ?key= share link keeps working — see
+		// TestPubListNotes_sharedNoteSurvivesReconcileWithoutGitPath.
+		if n.SharedPublicly {
+			continue
+		}
 		pruneOrphanNote(ctx, deps, repo.ID, n.Path)
 	}
 	return filtered, nil
