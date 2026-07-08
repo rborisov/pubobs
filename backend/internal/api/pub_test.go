@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pubobs/backend/internal/api"
@@ -353,6 +354,63 @@ func TestPubGetNote_shareKeyOnlyVisitor_noServerSideDecrypt(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.NotContains(t, resp, "html_content",
 		"a share-link-only visitor must decrypt client-side, never via server-inlined html_content")
+}
+
+// TestPubShareThenRender_healsPreExistingLegacyBlob reproduces the reported
+// production bug end-to-end: a note synced before encryption_key tracking
+// existed has a render blob encrypted under an unknown legacy key, while
+// its DB encryption_key column is still empty. An editor mints a "public"
+// share link via POST /share (exactly what the reported repro did), then an
+// anonymous visitor opens the resulting URL. Before the fix, /share handed
+// back a key that could never decrypt the pre-existing blob, so /render
+// happily served the undecryptable bytes and the client-side decrypt failed
+// with a generic "could not decrypt" — indistinguishable from a real crypto
+// bug. After the fix, /share heals (deletes) the stale blob, so the
+// anonymous visitor instead gets a clean 404 from /render (note "not yet
+// available"), and the note fully repairs itself the next time it's synced.
+func TestPubShareThenRender_healsPreExistingLegacyBlob(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "editor1", "editor@x.com", "Editor")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "editor1", "editor"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "3gpp/38213-konspekt.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "editor1", "sha1"))
+	require.Empty(t, note.EncryptionKey, "precondition: pre-migration note has no tracked key yet")
+
+	// The note's render blob was written long ago under the plugin's old
+	// client-generated key scheme — the DB has no idea what key this is.
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(0x7B)
+	}
+	legacyCiphertext := testGCMEncrypt(t, legacyKey, []byte("<h1>old 3GPP notes</h1>"))
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "3gpp/38213-konspekt.md", legacyCiphertext))
+
+	// Editor mints a public share link, exactly like the reported repro.
+	shareReq := httptest.NewRequest("POST", "/api/repos/r1/notes/3gpp/38213-konspekt.md/share", strings.NewReader(`{"mode":"public"}`))
+	shareReq.Header.Set("Authorization", bearerHeader(t, deps, "editor1", "editor@x.com", false))
+	shareRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(shareRR, shareReq)
+	require.Equal(t, http.StatusOK, shareRR.Code, shareRR.Body.String())
+
+	var shareResp map[string]any
+	require.NoError(t, json.NewDecoder(shareRR.Body).Decode(&shareResp))
+	mintedKey, _ := shareResp["key"].(string)
+	require.NotEmpty(t, mintedKey)
+
+	// Anonymous visitor opens the resulting share link.
+	renderReq := httptest.NewRequest("GET", "/pub/r1/render/3gpp/38213-konspekt.md?key="+mintedKey, nil)
+	renderRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(renderRR, renderReq)
+
+	require.Equal(t, http.StatusNotFound, renderRR.Code,
+		"a healed stale blob must read as 'not available' — never serve undecryptable bytes for the client to fail on")
 }
 
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {

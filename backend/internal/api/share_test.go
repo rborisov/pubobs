@@ -218,6 +218,159 @@ func TestUnshareNote_noRenderBlob_justRotatesAndFlips(t *testing.T) {
 	require.NotEmpty(t, note.EncryptionKey)
 }
 
+// TestShareNote_public_healsPreExistingKeyMismatchedBlob pins down the
+// exact production bug: a note synced before encryption_key tracking
+// existed (or otherwise left with a render blob under a key the DB no
+// longer knows) has an empty encryption_key and a render blob encrypted
+// under some other, unrelated key. Minting a public share link for it must
+// not hand out a URL that decrypts nothing forever — the mismatched blob
+// must be healed (deleted) so the note falls back to "not available" and
+// self-heals on the next real sync, instead of permanently 404/decrypt-
+// failing under a key the DB claims is correct.
+func TestShareNote_public_healsPreExistingKeyMismatchedBlob(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	seedNoteForShare(t, deps, "editor1", "editor")
+	ctx := context.Background()
+
+	// Simulate a note synced under the plugin's old client-generated-key
+	// scheme, before encryption_key existed: a render blob is present, but
+	// note.EncryptionKey is still "" (as migration 059113f leaves existing
+	// rows), encrypted under some key the DB has no record of.
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(0xAA)
+	}
+	ciphertext := testGCMEncrypt(t, legacyKey, []byte("<h1>old content</h1>"))
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	note, err := deps.Store.GetNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Empty(t, note.EncryptionKey, "precondition: note must not have a tracked key yet")
+
+	rr := doShareRequest(t, deps, "editor1", "share", `{"mode":"public"}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, true, resp["shared"])
+	newKeyB64, _ := resp["key"].(string)
+	require.NotEmpty(t, newKeyB64)
+
+	// The freshly-minted key can never have encrypted the pre-existing
+	// blob, so it must have been healed away rather than left mismatched.
+	remaining, err := rstore.Read("r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Nil(t, remaining, "stale, undecryptable render blob must be deleted by /share")
+
+	note, err = deps.Store.GetNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.True(t, note.SharedPublicly)
+	require.Equal(t, newKeyB64, note.EncryptionKey)
+}
+
+// TestShareNote_public_preservesValidMatchingBlob is the regression guard
+// for the fix above: a render blob that DOES decrypt correctly with the
+// note's key (the normal, healthy case) must never be touched by /share.
+func TestShareNote_public_preservesValidMatchingBlob(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	seedNoteForShare(t, deps, "editor1", "editor")
+	ctx := context.Background()
+
+	// First share mints the key normally.
+	rr := doShareRequest(t, deps, "editor1", "share", `{"mode":"public"}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	keyB64 := resp["key"].(string)
+	key, err := base64.RawURLEncoding.DecodeString(keyB64)
+	require.NoError(t, err)
+
+	// Simulate a real sync writing a correctly-encrypted blob under that key.
+	plaintext := []byte("<h1>real content</h1>")
+	ciphertext := testGCMEncrypt(t, key, plaintext)
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	// Re-sharing (idempotent) must not disturb a blob that already
+	// decrypts correctly under the current key.
+	rr2 := doShareRequest(t, deps, "editor1", "share", `{"mode":"public"}`)
+	require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+
+	remaining, err := rstore.Read("r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Equal(t, ciphertext, remaining, "a valid, correctly-keyed blob must survive /share untouched")
+}
+
+// TestServeNoteKey_healsPreExistingKeyMismatchedBlob mirrors the /share
+// heal test above for the /key endpoint, since it mints keys through the
+// exact same code path for the plugin's pre-sync key fetch.
+func TestServeNoteKey_healsPreExistingKeyMismatchedBlob(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	seedNoteForShare(t, deps, "editor1", "editor")
+	ctx := context.Background()
+
+	legacyKey := make([]byte, 32)
+	for i := range legacyKey {
+		legacyKey[i] = byte(0x55)
+	}
+	ciphertext := testGCMEncrypt(t, legacyKey, []byte("<h1>old content</h1>"))
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	rr := doShareRequest(t, deps, "editor1", "key", "")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	remaining, err := rstore.Read("r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Nil(t, remaining, "stale, undecryptable render blob must be deleted by /key")
+}
+
+// TestUnshareNote_staleRenderBlob_doesNotFail guards against a related
+// failure mode: revoking a share on a note whose stored blob doesn't
+// actually decrypt with its recorded key (the same underlying mismatch)
+// must not 500 the whole request. It should gracefully drop the
+// undecryptable blob and still complete the rotation/unshare.
+func TestUnshareNote_staleRenderBlob_doesNotFail(t *testing.T) {
+	deps := newTestDepsForShare(t)
+	seedNoteForShare(t, deps, "editor1", "editor")
+	ctx := context.Background()
+
+	rr := doShareRequest(t, deps, "editor1", "share", `{"mode":"public"}`)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var shareResp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&shareResp))
+	recordedKeyB64 := shareResp["key"].(string)
+
+	// Overwrite the render blob directly with bytes encrypted under a key
+	// that does NOT match note.EncryptionKey, simulating the exact
+	// mismatch this bug produces (recorded key present, but wrong for the
+	// bytes actually on disk).
+	wrongKey := make([]byte, 32)
+	for i := range wrongKey {
+		wrongKey[i] = byte(0xEE)
+	}
+	ciphertext := testGCMEncrypt(t, wrongKey, []byte("<h1>mismatched</h1>"))
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	rr2 := doShareRequest(t, deps, "editor1", "unshare", "")
+	require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+
+	note, err := deps.Store.GetNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.False(t, note.SharedPublicly)
+	require.NotEqual(t, recordedKeyB64, note.EncryptionKey)
+
+	remaining, err := rstore.Read("r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.Nil(t, remaining, "undecryptable blob must be dropped rather than left mismatched under the rotated key")
+}
+
 func TestServeNoteKey_mintsWithoutSharing(t *testing.T) {
 	deps := newTestDepsForShare(t)
 	seedNoteForShare(t, deps, "editor1", "editor")

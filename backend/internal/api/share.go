@@ -63,6 +63,17 @@ func serveShareNote(w http.ResponseWriter, r *http.Request, deps *Deps, claims *
 			writeError(w, http.StatusInternalServerError, "key generation failed")
 			return
 		}
+		// A note can have a stored render blob that was never encrypted
+		// with this key — most commonly a note synced before the
+		// encryption_key column/GetOrCreateNoteKey existed at all, under
+		// the plugin's old client-generated, frontmatter-embedded key
+		// scheme. Minting a link for such a note would hand out a URL
+		// that can NEVER decrypt ("could not decrypt" for every visitor,
+		// forever), since nothing else ever rewrites that blob unless the
+		// note's content actually changes and gets re-synced. Detect and
+		// heal that here, right when we're about to hand out a link,
+		// rather than silently shipping a known-broken one.
+		healStaleRenderBlob(r.Context(), deps, repoID, notePath, key)
 		if err := deps.Store.SetNoteShared(r.Context(), note.ID, true, key); err != nil {
 			writeError(w, http.StatusInternalServerError, "share failed")
 			return
@@ -111,6 +122,10 @@ func serveNoteKey(w http.ResponseWriter, r *http.Request, deps *Deps, claims *au
 		writeError(w, http.StatusInternalServerError, "key generation failed")
 		return
 	}
+	// Same defense as /share's public mode: don't let a stale, pre-existing
+	// render blob that predates this key linger and mismatch whatever key
+	// we just handed back (see healStaleRenderBlob's doc comment).
+	healStaleRenderBlob(r.Context(), deps, repoID, notePath, key)
 
 	writeJSON(w, http.StatusOK, map[string]any{"key": key})
 }
@@ -159,8 +174,22 @@ func serveUnshareNote(w http.ResponseWriter, r *http.Request, deps *Deps, claims
 	// spurious decrypt failure on an empty key).
 	if note.EncryptionKey != "" {
 		if err := reencryptRenderBlob(r.Context(), deps, repoID, notePath, note.EncryptionKey, newKey); err != nil {
-			writeError(w, http.StatusInternalServerError, "re-encrypt failed: "+err.Error())
-			return
+			if errors.Is(err, errStaleRenderBlob) {
+				// The stored blob doesn't actually decrypt with the note's
+				// recorded key — it predates key tracking (or otherwise
+				// mismatches), so there's no valid plaintext to carry
+				// forward onto the new key. Drop it rather than failing
+				// the whole unshare: the next real sync writes a fresh
+				// blob correctly matching the (now-rotated) key.
+				if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
+					if derr := rstore.Delete(repoID, notePath); derr != nil {
+						fmt.Printf("unshare: delete stale render blob %s/%s: %v\n", repoID, notePath, derr)
+					}
+				}
+			} else {
+				writeError(w, http.StatusInternalServerError, "re-encrypt failed: "+err.Error())
+				return
+			}
 		}
 	}
 
@@ -171,6 +200,15 @@ func serveUnshareNote(w http.ResponseWriter, r *http.Request, deps *Deps, claims
 
 	writeJSON(w, http.StatusOK, map[string]any{"shared": false})
 }
+
+// errStaleRenderBlob signals that a note's stored render blob failed to
+// decrypt with the key the DB records for it — almost always because the
+// blob predates encryption_key tracking (synced under the plugin's old
+// client-generated, frontmatter-embedded key scheme before this column
+// existed) or was otherwise written under a different, now-unknown key.
+// Callers should treat this as "nothing valid to carry forward," not as an
+// infrastructure failure.
+var errStaleRenderBlob = errors.New("render blob does not decrypt with the note's recorded key")
 
 // reencryptRenderBlob decrypts a note's stored render blob with oldKeyB64
 // and re-encrypts the identical plaintext with newKeyB64, overwriting it at
@@ -197,7 +235,7 @@ func reencryptRenderBlob(ctx context.Context, deps *Deps, repoID, notePath, oldK
 	}
 	plaintext, err := aesGCMDecrypt(oldKey, ciphertext)
 	if err != nil {
-		return fmt.Errorf("decrypt with old key: %w", err)
+		return fmt.Errorf("%w: %v", errStaleRenderBlob, err)
 	}
 
 	newKey, err := base64.RawURLEncoding.DecodeString(newKeyB64)
@@ -213,6 +251,43 @@ func reencryptRenderBlob(ctx context.Context, deps *Deps, repoID, notePath, oldK
 		return fmt.Errorf("write re-encrypted blob: %w", err)
 	}
 	return nil
+}
+
+// healStaleRenderBlob checks whether a note's existing render blob (if any)
+// actually decrypts with keyB64 — its current, DB-recorded canonical key —
+// and deletes it if not. A mismatch here means the blob was never encrypted
+// with this key at all: most likely it predates encryption_key tracking
+// (the plugin's old scheme generated a key locally and embedded it in
+// frontmatter instead), or some other divergence left a stale blob behind.
+// Left in place, it would sit there permanently undecryptable, since
+// nothing else ever rewrites a note's blob unless its content changes and
+// gets re-synced — every future /share and every future read would keep
+// failing with the exact same "could not decrypt" symptom.
+//
+// Deleting it makes hasRender false again, so both handlePubGetNote (for
+// real repo-access readers) and handlePubGetRender (for share-link
+// visitors) correctly fall back to "not yet available" instead of serving
+// bytes that can never be decrypted with the key the DB now claims is
+// correct. The note fully self-heals the moment it's genuinely re-synced,
+// since the sync path always writes a fresh blob encrypted with whatever
+// key it just confirmed via GetOrCreateNoteKey/the /key endpoint.
+func healStaleRenderBlob(ctx context.Context, deps *Deps, repoID, notePath, keyB64 string) {
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, repoID)
+	if err != nil {
+		return
+	}
+	ciphertext, err := rstore.Read(repoID, notePath)
+	if err != nil || ciphertext == nil {
+		return
+	}
+	if _, derr := decryptNoteRenderHTML(keyB64, ciphertext); derr == nil {
+		return // decrypts fine under the current key — nothing to heal
+	}
+	if derr := rstore.Delete(repoID, notePath); derr != nil {
+		fmt.Printf("heal stale render blob delete %s/%s: %v\n", repoID, notePath, derr)
+	} else {
+		fmt.Printf("healed stale render blob (key mismatch) %s/%s — will regenerate on next sync\n", repoID, notePath)
+	}
 }
 
 // aesGCMEncrypt/aesGCMDecrypt/newGCM replicate the exact AES-256-GCM,
