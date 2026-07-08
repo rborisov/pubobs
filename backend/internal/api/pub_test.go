@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -245,6 +246,113 @@ func TestPubListNotes_anonymousGuestSeesEmptyRole(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.Equal(t, "", resp["role"])
+}
+
+// TestPubGetNote_authenticatedRealAccess_decryptsRenderWithoutKey pins down
+// the reported regression: an authenticated user with a REAL repo role
+// (reader, here — the weakest real role) opening a bare /pub note URL with
+// no ?key= at all must still see the note's actual decrypted content, not
+// the "open via a shared link" placeholder. Before the fix, handlePubGetNote
+// only ever inlined html_content for legacy (never-encrypted) notes, so any
+// note synced under the render-encryption scheme was unreadable by anyone
+// who didn't separately hold a share-link key — even a real repo member.
+func TestPubGetNote_authenticatedRealAccess_decryptsRenderWithoutKey(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "u1", "sha1"))
+
+	// A note synced under the encryption scheme, but never shared publicly
+	// (mirrors what a normal sync does for every note regardless of share
+	// state: GetOrCreateNoteKey always mints a key and the render blob is
+	// always written encrypted).
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	keyBytes, err := base64.RawURLEncoding.DecodeString(key)
+	require.NoError(t, err)
+
+	plaintext := []byte("<h1>Real content</h1>")
+	ciphertext := testGCMEncrypt(t, keyBytes, plaintext)
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, string(plaintext), resp["html_content"],
+		"an authenticated user with a real repo role must see decrypted content with no ?key=")
+	require.Equal(t, "reader", resp["role"])
+}
+
+// TestPubGetNote_instanceAdmin_decryptsRenderWithoutKey covers the exact
+// adjacent scenario from the bug report: an instance admin (who has no
+// explicit per-repo access grant at all — admins bypass the repo ACL
+// entirely) opens a bare reader link for a repo/note with no ?key=, and
+// must see the real content exactly as before the sharing feature existed.
+func TestPubGetNote_instanceAdmin_decryptsRenderWithoutKey(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	// Deliberately NO GrantAccess call — the admin has no per-repo role row
+	// at all, only claims.IsAdmin.
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "3gpp/38211-konspekt.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "admin1", "sha1"))
+
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	keyBytes, err := base64.RawURLEncoding.DecodeString(key)
+	require.NoError(t, err)
+
+	plaintext := []byte("<h1>3GPP TS 38.211</h1>")
+	ciphertext := testGCMEncrypt(t, keyBytes, plaintext)
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "3gpp/38211-konspekt.md", ciphertext))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/3gpp/38211-konspekt.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, string(plaintext), resp["html_content"],
+		"an instance admin must see decrypted content via a bare reader URL, exactly like any other real repo access")
+	require.Equal(t, "admin", resp["role"])
+}
+
+// TestPubGetNote_shareKeyOnlyVisitor_noServerSideDecrypt verifies the
+// server-side decrypt path introduced above never fires for a share-link-
+// only visitor (valid key, no real repo role): they must still go through
+// /render + client-side decryption with their own key, exactly as before —
+// the server must never decrypt render blobs on behalf of a caller who
+// isn't a real repo member.
+func TestPubGetNote_shareKeyOnlyVisitor_noServerSideDecrypt(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, true)
+	rr := getPubNote(deps, "?key="+key)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotContains(t, resp, "html_content",
+		"a share-link-only visitor must decrypt client-side, never via server-inlined html_content")
 }
 
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {

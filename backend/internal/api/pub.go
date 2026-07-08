@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mime"
@@ -230,15 +231,33 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
 		}
 
-		// hasRender reflects whether this note has an encrypted render blob
-		// (in which case the client must fetch it separately from /render,
-		// with a key if it's accessing via a share link) versus a legacy
-		// note synced before render-blob encryption existed, whose plaintext
-		// HTML the server still caches directly and can inline below.
+		// hasRender reflects whether this note has an encrypted render blob.
+		// A share-link-only visitor (no real repo role, just a matching
+		// note key) must fetch that blob separately from /render and
+		// decrypt it client-side with their own ?key= — the server never
+		// decrypts on their behalf.
+		//
+		// A caller with real repo-level access (pubRepoAccess grants it —
+		// guest-open repo, or an authenticated session with a role here)
+		// already has full standing rights to this note regardless of any
+		// share/key state, exactly as before this feature existed. For
+		// them, the server decrypts the render blob right here and inlines
+		// the plaintext below, just like it does for a legacy pre-encryption
+		// note — this is the ONLY content path for a logged-in repo member
+		// who opens a bare /read/:repoId/:path URL with no ?key=, so it must
+		// never be skipped for them.
 		hasRender := false
+		decryptedHTML, hasDecrypted := "", false
 		if rstore, rerr := deps.Resolver.RenderStoreFor(r.Context(), repoID); rerr == nil {
 			if data, _ := rstore.Read(repoID, notePath); data != nil {
 				hasRender = true
+				if note.EncryptionKey != "" && pubRepoAccess(r, deps, repoID) != nil {
+					if plaintext, derr := decryptNoteRenderHTML(note.EncryptionKey, data); derr == nil {
+						decryptedHTML, hasDecrypted = plaintext, true
+					} else {
+						fmt.Printf("decrypt render blob %s/%s: %v\n", repoID, notePath, derr)
+					}
+				}
 			}
 		}
 
@@ -259,8 +278,11 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			"role": callerRepoRole(r, deps, repoID),
 		}
 
-		if !hasRender {
-			// Legacy fallback: notes not yet synced with encryption
+		switch {
+		case hasDecrypted:
+			resp["html_content"] = rewriteRepoID(decryptedHTML, repoID)
+		case !hasRender:
+			// Legacy fallback: notes not yet synced with encryption.
 			htmlContent, _ := deps.Cache.ReadRenderedHTML(repoID, notePath)
 			if htmlContent == "" {
 				htmlContent = snap.HTMLContent
@@ -403,6 +425,24 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(data)
 	}
+}
+
+// decryptNoteRenderHTML decrypts a note's stored render blob using its
+// backend-owned encryption key, for inlining into handlePubGetNote's
+// response to a caller with real repo-level access. keyB64 is the same
+// base64url-encoded 32-byte AES key format used throughout this feature
+// (see store.GenerateNoteKey); ciphertext uses the nonce-prepended AES-256-GCM
+// layout shared with reencryptRenderBlob in share.go.
+func decryptNoteRenderHTML(keyB64 string, ciphertext []byte) (string, error) {
+	key, err := base64.RawURLEncoding.DecodeString(keyB64)
+	if err != nil {
+		return "", fmt.Errorf("decode key: %w", err)
+	}
+	plaintext, err := aesGCMDecrypt(key, ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
 }
 
 func noteTitle(path string, snap *model.NoteSnapshot) string {
