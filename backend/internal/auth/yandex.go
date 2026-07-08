@@ -36,6 +36,10 @@ func (c *YandexClient) AuthCodeURL(state string) string {
 		"client_id":     {c.clientID},
 		"redirect_uri":  {c.redirectURL},
 		"state":         {state},
+		// force_confirm makes Yandex OAuth always show the account chooser /
+		// consent screen instead of silently completing with whichever
+		// Yandex account already has an active session in the browser.
+		"force_confirm": {"yes"},
 	}
 	return yandexAuthURL + "?" + params.Encode()
 }
