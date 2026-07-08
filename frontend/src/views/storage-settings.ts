@@ -60,6 +60,9 @@ export async function storageSettingsView(): Promise<HTMLElement> {
   });
   wrap.appendChild(addBtn);
 
+  let destinations: StorageDestination[] = [];
+  let destUsageById = new Map<string, StorageUsage['destinations'][number]>();
+
   async function reloadUsage(): Promise<void> {
     usageWrap.innerHTML = '';
     const loading = loadingRow('Loading usage…');
@@ -76,13 +79,8 @@ export async function storageSettingsView(): Promise<HTMLElement> {
       usageWrap.innerHTML = `<p style="color:#c00;margin:0">${e instanceof Error ? e.message : String(e)}</p>`;
       return;
     }
+    destUsageById = new Map(usage.destinations.map((d) => [d.id, d]));
     const localTotal = usage.local.db_bytes + usage.local.repos_bytes + usage.local.renders_bytes + usage.local.assets_bytes;
-    const destLines = usage.destinations.map((d) => {
-      if (d.error) {
-        return `<div><strong>${esc(d.name)}:</strong> <span style="color:#c00">unavailable — ${esc(d.error)}</span></div>`;
-      }
-      return `<div><strong>${esc(d.name)}:</strong> ${formatBytes(d.renders_bytes)} renders, ${formatBytes(d.assets_bytes)} assets</div>`;
-    }).join('');
     const row = (label: string, value: string): string =>
       `<div style="display:flex;justify-content:space-between;max-width:320px"><span>${label}</span><span>${value}</span></div>`;
     usageWrap.innerHTML = `
@@ -94,8 +92,8 @@ export async function storageSettingsView(): Promise<HTMLElement> {
       <div style="border-top:1px solid #cbd5e1;margin:4px 0;max-width:320px"></div>
       ${row('<strong>Total local</strong>', `<strong>${formatBytes(localTotal)}</strong>`)}
       ${row('Free disk', formatBytes(usage.local.free_bytes))}
-      ${destLines ? `<div style="font-weight:600;margin:10px 0 4px">Destination usage</div>${destLines}` : ''}
     `;
+    renderDestinations(listWrap, destinations, destUsageById);
   }
 
   async function reloadDestinations(): Promise<void> {
@@ -103,17 +101,20 @@ export async function storageSettingsView(): Promise<HTMLElement> {
     const loading = loadingRow('Loading destinations…');
     loading.style.color = '#64748b';
     listWrap.appendChild(loading);
-    let dests: StorageDestination[];
     try {
-      dests = await listStorageDestinations();
+      destinations = await listStorageDestinations();
     } catch (e: unknown) {
       listWrap.innerHTML = `<p style="color:#c00">${e instanceof Error ? e.message : String(e)}</p>`;
       return;
     }
-    renderDestinations(listWrap, dests);
+    renderDestinations(listWrap, destinations, destUsageById);
   }
 
-  function renderDestinations(container: HTMLElement, dests: StorageDestination[]): void {
+  function renderDestinations(
+    container: HTMLElement,
+    dests: StorageDestination[],
+    usageById: Map<string, StorageUsage['destinations'][number]>,
+  ): void {
     container.innerHTML = '';
 
     if (dests.length === 0) {
@@ -126,7 +127,7 @@ export async function storageSettingsView(): Promise<HTMLElement> {
 
     const table = document.createElement('table');
     table.style.marginBottom = '16px';
-    table.innerHTML = `<thead><tr><th>Name</th><th>Bucket</th><th></th></tr></thead>`;
+    table.innerHTML = `<thead><tr><th>Name</th><th>Bucket</th><th>Usage</th><th></th></tr></thead>`;
     const tbody = document.createElement('tbody');
 
     for (const dest of dests) {
@@ -136,6 +137,18 @@ export async function storageSettingsView(): Promise<HTMLElement> {
       const bucketCell = document.createElement('td');
       bucketCell.style.fontFamily = 'monospace';
       bucketCell.textContent = dest.s3_bucket;
+
+      const usageCell = document.createElement('td');
+      const destUsage = usageById.get(dest.id);
+      if (!destUsage) {
+        usageCell.style.color = '#94a3b8';
+        usageCell.textContent = '—';
+      } else if (destUsage.error) {
+        usageCell.style.color = '#c00';
+        usageCell.textContent = `unavailable — ${destUsage.error}`;
+      } else {
+        usageCell.textContent = `${formatBytes(destUsage.renders_bytes)} renders, ${formatBytes(destUsage.assets_bytes)} assets`;
+      }
 
       const actionCell = document.createElement('td');
       const editBtn = document.createElement('button');
@@ -177,6 +190,7 @@ export async function storageSettingsView(): Promise<HTMLElement> {
 
       row.appendChild(nameCell);
       row.appendChild(bucketCell);
+      row.appendChild(usageCell);
       row.appendChild(actionCell);
       tbody.appendChild(row);
     }
@@ -281,8 +295,4 @@ function buildDestinationForm(
   wrap.appendChild(btnRow);
 
   return wrap;
-}
-
-function esc(s: string): string {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
