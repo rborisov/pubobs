@@ -108,6 +108,17 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
 
     select.addEventListener('change', async () => {
       const newDestId = select.value || null;
+      const currentDestId = repo.storage_destination_id ?? null;
+      if (newDestId !== currentDestId) {
+        const destName = newDestId ? (destinations.find(d => d.id === newDestId)?.name ?? 'the selected destination') : 'Local';
+        const confirmed = confirm(
+          `Switch this repo's storage to "${destName}"? Its existing renders and assets will be migrated from the current destination to the new one in the background — this may take a while for large repos.`,
+        );
+        if (!confirmed) {
+          select.value = currentDestId ?? '';
+          return;
+        }
+      }
       select.disabled = true;
       errEl.style.display = 'none';
       try {
