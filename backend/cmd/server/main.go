@@ -89,6 +89,7 @@ func main() {
 		OIDCProviders: providers,
 		Config:        cfg,
 		Resolver:      resolver,
+		Update:        api.NewUpdateManager(cfg),
 	}
 
 	jobs.StartEvictionJob(ctx, deps.Store, deps.Cache, cfg)
@@ -112,7 +113,7 @@ func main() {
 		cancel()
 	}()
 
-	log.Printf("PubObs backend listening on :%s", cfg.Port)
+	log.Printf("PubObs backend %s listening on :%s", api.Version, cfg.Port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)
 	}

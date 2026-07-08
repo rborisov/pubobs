@@ -16,6 +16,9 @@ type Deps struct {
 	OIDCProviders []*auth.NamedProvider
 	Config        *config.Config
 	Resolver      *storageresolver.Resolver
+	// Update is nil in most existing tests (they construct Deps directly
+	// without it); router.go and update.go guard every access accordingly.
+	Update *UpdateManager
 }
 
 // oidcProvider returns the named provider by ID, or nil if not found.

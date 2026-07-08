@@ -11,6 +11,12 @@ services:
       - ./data/repos:/data/repos
       - ./data/renders:/data/renders
       - ./data/assets:/data/assets
+      # Lets the in-app self-updater (internal/api/update.go) apply files
+      # into the live install dir and drive `docker compose up -d --build`
+      # against the *host's* Docker daemon from inside this container — see
+      # the Dockerfile comment for the security trade-off this implies.
+      - ..:/opt/pubobs
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       PUBOBS_BASE_URL: ${PUBOBS_BASE_URL}
       PUBOBS_OIDC_ISSUER: ${PUBOBS_OIDC_ISSUER}
@@ -24,3 +30,6 @@ services:
       PUBOBS_CACHE_CHECK_INTERVAL: 1h
       PUBOBS_DISK_WARN_PCT: 20
       PUBOBS_DISK_CRIT_PCT: 5
+      PUBOBS_UPDATE_REPO_URL: ${PUBOBS_UPDATE_REPO_URL:-https://github.com/rborisov/pubobs.git}
+      PUBOBS_UPDATE_BRANCH: ${PUBOBS_UPDATE_BRANCH:-main}
+      PUBOBS_UPDATE_INSTALL_DIR: /opt/pubobs

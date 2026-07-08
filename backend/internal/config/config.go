@@ -25,15 +25,18 @@ type Config struct {
 	DiskWarnPct        float64
 	DiskCritPct        float64
 	DBPath             string
-	RenderStoreType string // "local" (default) or "s3" — bootstrap default only, see storage_settings table
-	RenderDir       string // base dir for local render-blob store
-	AssetDir        string // base dir for local asset store
-	S3Endpoint      string
-	S3Bucket        string
-	S3AccessKey     string
-	S3SecretKey     string
-	S3Region        string
-	S3UseSSL        bool
+	RenderStoreType    string // "local" (default) or "s3" — bootstrap default only, see storage_settings table
+	RenderDir          string // base dir for local render-blob store
+	AssetDir           string // base dir for local asset store
+	S3Endpoint         string
+	S3Bucket           string
+	S3AccessKey        string
+	S3SecretKey        string
+	S3Region           string
+	S3UseSSL           bool
+	UpdateRepoURL      string // git remote the in-app self-updater fetches from
+	UpdateBranch       string // branch the in-app self-updater tracks
+	UpdateInstallDir   string // live install dir the self-updater applies files into (matches install.sh's INSTALL_DIR)
 }
 
 func Load() (*Config, error) {
@@ -65,14 +68,17 @@ func Load() (*Config, error) {
 		defaultAssetDir = "/data/assets"
 	}
 	cfg.RenderStoreType = getEnv("PUBOBS_RENDER_STORE", "local")
-	cfg.RenderDir       = getEnv("PUBOBS_RENDER_DIR", defaultRenderDir)
-	cfg.AssetDir        = getEnv("PUBOBS_ASSET_DIR", defaultAssetDir)
-	cfg.S3Endpoint      = getEnv("PUBOBS_S3_ENDPOINT", "")
-	cfg.S3Bucket        = getEnv("PUBOBS_S3_BUCKET", "")
-	cfg.S3AccessKey     = getEnv("PUBOBS_S3_ACCESS_KEY", "")
-	cfg.S3SecretKey     = getEnv("PUBOBS_S3_SECRET_KEY", "")
-	cfg.S3Region        = getEnv("PUBOBS_S3_REGION", "")
-	cfg.S3UseSSL        = getEnv("PUBOBS_S3_USE_SSL", "true") != "false"
+	cfg.RenderDir = getEnv("PUBOBS_RENDER_DIR", defaultRenderDir)
+	cfg.AssetDir = getEnv("PUBOBS_ASSET_DIR", defaultAssetDir)
+	cfg.S3Endpoint = getEnv("PUBOBS_S3_ENDPOINT", "")
+	cfg.S3Bucket = getEnv("PUBOBS_S3_BUCKET", "")
+	cfg.S3AccessKey = getEnv("PUBOBS_S3_ACCESS_KEY", "")
+	cfg.S3SecretKey = getEnv("PUBOBS_S3_SECRET_KEY", "")
+	cfg.S3Region = getEnv("PUBOBS_S3_REGION", "")
+	cfg.S3UseSSL = getEnv("PUBOBS_S3_USE_SSL", "true") != "false"
+	cfg.UpdateRepoURL = getEnv("PUBOBS_UPDATE_REPO_URL", "https://github.com/rborisov/pubobs.git")
+	cfg.UpdateBranch = getEnv("PUBOBS_UPDATE_BRANCH", "main")
+	cfg.UpdateInstallDir = getEnv("PUBOBS_UPDATE_INSTALL_DIR", "/opt/pubobs")
 
 	if raw := os.Getenv("PUBOBS_SECRET_KEY"); raw != "" {
 		key, err := hex.DecodeString(raw)
