@@ -391,6 +391,54 @@ describe('SyncManager.syncRepo', () => {
     const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
     expect(deletedPaths).toContain('notes/pulled-then-deleted.md');
   });
+
+  test('skips unchanged notes when syncHashes match, unless force is set', async () => {
+    const TFileMock = (jest.requireMock('obsidian') as any).TFile;
+    const file = { path: 'Published/notes/foo.md', extension: 'md', basename: 'foo' };
+    const content = '# Hello';
+    const app = {
+      vault: {
+        getFiles: jest.fn().mockReturnValue([file]),
+        getAbstractFileByPath: jest.fn().mockReturnValue(new TFileMock()),
+        create: jest.fn().mockResolvedValue(undefined),
+        modify: jest.fn().mockResolvedValue(undefined),
+        createFolder: jest.fn().mockResolvedValue(undefined),
+        read: jest.fn().mockResolvedValue(content),
+      },
+      metadataCache: {
+        getFileCache: jest.fn().mockReturnValue({ frontmatter: {} }),
+        getFirstLinkpathDest: jest.fn().mockReturnValue(null),
+      },
+    };
+    const client = {
+      listFiles: jest.fn().mockResolvedValue([]),
+      getNoteKey: jest.fn().mockResolvedValue('AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE'),
+      sync: jest.fn().mockResolvedValue({ commit_sha: 'abc1234567890', note_keys: {} }),
+    };
+    const settings = {
+      repoMappings: { 'repo-1': { repoName: 'Test', vaultFolder: 'Published', subfolder: '' } },
+      pullSHAs: {},
+      syncHashes: {},
+      noteKeys: {},
+    };
+    const save = jest.fn().mockImplementation(async () => {
+      // persist settings like the real saveSettings callback
+    });
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+    expect(client.sync).toHaveBeenCalledTimes(1);
+    (client.sync as jest.Mock).mockClear();
+
+    await manager.syncRepo('repo-1');
+    expect(client.sync).not.toHaveBeenCalled();
+
+    await manager.syncRepo('repo-1', { force: true });
+    expect(client.sync).toHaveBeenCalledTimes(1);
+    const syncFiles = (client.sync as jest.Mock).mock.calls[0][1];
+    expect(syncFiles).toHaveLength(1);
+    expect(syncFiles[0].path).toBe('notes/foo.md');
+  });
 });
 
 describe('SyncManager key handling', () => {

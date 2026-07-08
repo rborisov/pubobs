@@ -37,18 +37,15 @@ export default class PubObsPlugin extends Plugin {
       id: 'sync-all',
       name: 'Sync all repos',
       callback: async () => {
-        const repoIds = Object.keys(this.settings.repoMappings);
-        if (repoIds.length === 0) {
-          new Notice('PubObs: no repos configured — open Settings to add one');
-          return;
-        }
-        for (const id of repoIds) {
-          try {
-            await this.syncManager.syncRepo(id);
-          } catch (e: unknown) {
-            new Notice(`PubObs sync failed (${id}): ` + (e instanceof Error ? e.message : String(e)));
-          }
-        }
+        await this.syncAllRepos();
+      },
+    });
+
+    this.addCommand({
+      id: 'force-resync-all',
+      name: 'Force re-sync all notes',
+      callback: async () => {
+        await this.syncAllRepos({ force: true });
       },
     });
 
@@ -68,6 +65,21 @@ export default class PubObsPlugin extends Plugin {
 
     this.settingTab = new PubObsSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
+  }
+
+  private async syncAllRepos(opts?: { force?: boolean }): Promise<void> {
+    const repoIds = Object.keys(this.settings.repoMappings);
+    if (repoIds.length === 0) {
+      new Notice('PubObs: no repos configured — open Settings to add one');
+      return;
+    }
+    for (const id of repoIds) {
+      try {
+        await this.syncManager.syncRepo(id, opts);
+      } catch (e: unknown) {
+        new Notice(`PubObs sync failed (${id}): ` + (e instanceof Error ? e.message : String(e)));
+      }
+    }
   }
 
   async loadSettings(): Promise<void> {

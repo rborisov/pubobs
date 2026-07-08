@@ -128,7 +128,8 @@ export class SyncManager {
     private saveSettings: () => Promise<void>,
   ) {}
 
-  async syncRepo(repoId: string): Promise<void> {
+  async syncRepo(repoId: string, opts?: { force?: boolean }): Promise<void> {
+    const force = opts?.force ?? false;
     const mapping = this.settings.repoMappings[repoId];
     if (!mapping) throw new Error(`No folder mapping for repo ${repoId}`);
 
@@ -274,7 +275,7 @@ export class SyncManager {
         const hash = fnv1a(content);
         newHashes[repoPath] = hash;
 
-        if (storedHashes[repoPath] === hash) {
+        if (!force && storedHashes[repoPath] === hash) {
           skipped++;
           continue;
         }
