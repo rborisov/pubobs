@@ -20,6 +20,12 @@ function dirOf(path: string): string {
   return i === -1 ? '' : path.slice(0, i);
 }
 
+function fileNameOf(path: string): string {
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
 function buildFolderTree(notes: PubNote[]): FolderNode {
   const root: FolderNode = { name: '', fullPath: '', children: [], count: notes.length };
   const byPath = new Map<string, FolderNode>();
@@ -247,6 +253,11 @@ function renderNoteList(
       titleSpan.className = 'r-note-link-title';
       titleSpan.textContent = note.title;
       left.appendChild(titleSpan);
+
+      const fileNameSpan = document.createElement('span');
+      fileNameSpan.className = 'r-note-link-filename';
+      fileNameSpan.textContent = fileNameOf(note.path);
+      left.appendChild(fileNameSpan);
 
       if ((note.tags ?? []).length > 0) {
         const tagRow = document.createElement('div');

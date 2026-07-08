@@ -56,6 +56,9 @@ export function ensureReaderStyles(): void {
     }
     .r-note-link:hover { background: var(--r-hover-bg); }
     .r-note-link-title { font-weight: 500; }
+    .r-note-link-filename {
+      font-size: 0.75rem; color: var(--r-text-faint); font-family: ui-monospace, monospace;
+    }
     .r-note-link-date { font-size: 0.75rem; color: var(--r-text-faint); white-space: nowrap; margin-left: 16px; }
     .r-section-heading {
       font-size: 0.875rem; font-weight: 600; color: var(--r-text-muted);
