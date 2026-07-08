@@ -10,6 +10,7 @@ services:
       - ./data/db:/data/db
       - ./data/repos:/data/repos
       - ./data/renders:/data/renders
+      - ./data/assets:/data/assets
     environment:
       PUBOBS_BASE_URL: ${PUBOBS_BASE_URL}
       PUBOBS_OIDC_ISSUER: ${PUBOBS_OIDC_ISSUER}

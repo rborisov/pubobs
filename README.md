@@ -187,7 +187,8 @@ After first boot, manage storage from the admin panel:
     └── data/
         ├── db/pubobs.db      ← SQLite database
         ├── repos/            ← cloned repo cache
-        └── renders/          ← encrypted render blobs
+        ├── renders/          ← encrypted render blobs
+        └── assets/           ← media assets (images, etc.)
 ```
 
 ---
