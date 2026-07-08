@@ -2,6 +2,7 @@ package gitcache_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -199,6 +200,76 @@ func TestCache_Sync_DeletesRemovedPaths(t *testing.T) {
 		pathsAfter = append(pathsAfter, e.Path)
 	}
 	require.NotContains(t, pathsAfter, "hello.md", "deleted path must be removed from the git working tree and no longer listed")
+}
+
+// TestCache_Sync_DeletesManyNonASCIIPaths is the regression test for the
+// 494ca9da incident: a sync deleting dozens of Cyrillic-named paths at once
+// (as happens when a large vault's notes are bulk-renamed from Cyrillic to
+// Latin filenames) must remove every one of them from the working tree and
+// the remote in a single Sync call, with no partial failure or crash
+// part-way through the deletion loop.
+func TestCache_Sync_DeletesManyNonASCIIPaths(t *testing.T) {
+	bareURL := newBareRepo(t)
+
+	const numFiles = 45
+	var cyrillicPaths []string
+	work := t.TempDir()
+	runGit(t, work, "clone", bareURL, ".")
+	for i := 0; i < numFiles; i++ {
+		name := fmt.Sprintf("аппаратура-%02d.md", i)
+		cyrillicPaths = append(cyrillicPaths, name)
+		require.NoError(t, os.WriteFile(filepath.Join(work, name), []byte(fmt.Sprintf("# Заметка %d", i)), 0644))
+	}
+	// A mix of nested-directory non-ASCII paths too, matching the real
+	// repo's "knowledge/..."-style subfolders.
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "знания"), 0755))
+	nestedPath := "знания/обзор.md"
+	cyrillicPaths = append(cyrillicPaths, nestedPath)
+	require.NoError(t, os.WriteFile(filepath.Join(work, nestedPath), []byte("# Overview"), 0644))
+
+	runGit(t, work, "add", ".")
+	runGit(t, work, "commit", "-m", "seed many non-ASCII files")
+	runGit(t, work, "push", "origin", "HEAD:main")
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "many-non-ascii-repo",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	// Sanity check: all files are visible before the delete-heavy sync.
+	before, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+	require.Len(t, before, numFiles+1)
+
+	// Renamed-to-Latin replacement content, synced in the same call that
+	// deletes all the old Cyrillic paths — mirroring the plugin's actual
+	// "many old paths deleted, a handful of new Latin paths added" sync.
+	newFiles := []gitcache.SyncFile{
+		{Path: "hardware-00.md", MDContent: "# Note 0"},
+		{Path: "knowledge/overview.md", MDContent: "# Overview"},
+	}
+
+	sha, err := cache.Sync(context.Background(), repo, "", newFiles, nil, cyrillicPaths, "sync: rename Cyrillic notes to Latin")
+	require.NoError(t, err, "Sync must succeed when deleting many non-ASCII paths in one call")
+	require.NotEmpty(t, sha)
+
+	after, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+	var afterPaths []string
+	for _, e := range after {
+		afterPaths = append(afterPaths, e.Path)
+	}
+	for _, p := range cyrillicPaths {
+		require.NotContainsf(t, afterPaths, p, "deleted non-ASCII path %q must no longer be listed", p)
+	}
+	require.Contains(t, afterPaths, "hardware-00.md")
+	require.Contains(t, afterPaths, "knowledge/overview.md")
+	require.Len(t, afterPaths, 2, "only the two newly-synced files should remain")
 }
 
 // TestCache_Sync_DeletedPathAlreadyGone verifies a deletedPaths entry for a

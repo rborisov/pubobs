@@ -84,6 +84,7 @@ func main() {
 
 	repoCache := gitcache.NewCache(cfg.RepoCacheDir)
 	repoCache.SetGitTimeouts(cfg.GitCloneTimeout, cfg.GitFetchTimeout)
+	repoCache.SetLocalOpTimeout(cfg.GitLocalOpTimeout)
 
 	deps := &api.Deps{
 		Store:         appStore,

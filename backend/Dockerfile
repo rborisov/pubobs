@@ -12,6 +12,18 @@ FROM alpine:3.21
 # the host regardless. This is the same trade-off the update mechanism's
 # original design made; see docs/README for the operator-facing writeup.
 RUN apk add --no-cache git ca-certificates docker-cli docker-cli-compose
+# Since git 2.35.2, `git` refuses to operate on a repository directory owned
+# by a different UID than the running process ("detected dubious ownership")
+# unless that path is explicitly trusted via safe.directory. This container
+# runs as root, but its /data/repos clones live on a bind-mounted host
+# volume that install.sh's `chown` steps (or a future re-baselining of what
+# UID owns that volume) can put under a different owner at any time — so
+# rather than trust specific paths, blanket-trust everything: this
+# container's only job is running git against its own data volumes, there's
+# no other untrusted repo it could ever be pointed at. (Also self-healed at
+# the code level in gitcache.GitRunner.IsHealthy/trustDirectory as
+# defense-in-depth, in case this line is ever lost from a future image.)
+RUN git config --global --add safe.directory '*'
 ARG TARGETARCH=amd64
 COPY backend/bin/pubobs-linux-${TARGETARCH} /usr/local/bin/pubobs
 VOLUME ["/data"]

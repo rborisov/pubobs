@@ -24,6 +24,7 @@ type Config struct {
 	CacheCheckInterval time.Duration
 	GitCloneTimeout    time.Duration // full/initial git clone before it's killed as failed (can legitimately be slow for large repos)
 	GitFetchTimeout    time.Duration // incremental git fetch/push (FetchReset, InitializeIfEmpty, AddCommitPush) before it's killed as failed (expected to always be fast)
+	GitLocalOpTimeout  time.Duration // local-only git ops (add/commit/rev-parse/ls-files/show/...) before killed as failed (safety net; expected to always be near-instant)
 	DiskWarnPct        float64
 	DiskCritPct        float64
 	DBPath             string
@@ -103,6 +104,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.GitFetchTimeout, err = parseDuration("PUBOBS_GIT_FETCH_TIMEOUT", "25s"); err != nil {
+		return nil, err
+	}
+	if cfg.GitLocalOpTimeout, err = parseDuration("PUBOBS_GIT_LOCAL_OP_TIMEOUT", "2m"); err != nil {
 		return nil, err
 	}
 	if cfg.DiskWarnPct, err = parseFloat("PUBOBS_DISK_WARN_PCT", 20); err != nil {

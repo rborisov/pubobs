@@ -229,7 +229,18 @@ build_app() {
 start_containers() {
   info "Preparing data directories..."
   mkdir -p "$BACKEND_DIR/data/db" "$BACKEND_DIR/data/repos" "$BACKEND_DIR/data/renders" "$BACKEND_DIR/data/assets"
-  chown -R 1000:1000 "$BACKEND_DIR/data"
+  # The container has run as root (not a uid-1000 non-root user) since the
+  # self-update work landed — see the Dockerfile's note on why. Owning this
+  # volume as root keeps it consistent with the process UID that actually
+  # reads/writes it; besides being pointless, chowning it to 1000:1000
+  # (a leftover from the pre-root image) makes git inside the container
+  # refuse to touch any already-cloned repo under data/repos with a
+  # "dubious ownership" error on the next request, since the clone's owner
+  # (root) would then mismatch the directory's owner (1000). That error is
+  # defended against elsewhere too (Dockerfile's safe.directory config,
+  # gitcache's self-heal), but there's no reason to manufacture the
+  # ownership mismatch here in the first place.
+  chown -R 0:0 "$BACKEND_DIR/data"
 
   info "Starting containers..."
   docker compose -f "$BACKEND_DIR/docker-compose.yml" down 2>/dev/null || true
@@ -240,7 +251,8 @@ start_containers() {
 restart_containers() {
   info "Restarting containers..."
   mkdir -p "$BACKEND_DIR/data/db" "$BACKEND_DIR/data/repos" "$BACKEND_DIR/data/renders" "$BACKEND_DIR/data/assets"
-  chown -R 1000:1000 "$BACKEND_DIR/data"
+  # See start_containers' comment on why this is 0:0, not 1000:1000.
+  chown -R 0:0 "$BACKEND_DIR/data"
   docker compose -f "$BACKEND_DIR/docker-compose.yml" up -d
   wait_healthy
 }
@@ -458,7 +470,8 @@ do_reinstall() {
     info "Restoring data..."
     mkdir -p "$BACKEND_DIR/data"
     cp -r "$backup_dir/." "$BACKEND_DIR/data/"
-    chown -R 1000:1000 "$BACKEND_DIR/data"
+    # See start_containers' comment on why this is 0:0, not 1000:1000.
+    chown -R 0:0 "$BACKEND_DIR/data"
     docker compose -f "$BACKEND_DIR/docker-compose.yml" restart
     wait_healthy
     success "Data restored from $backup_dir"

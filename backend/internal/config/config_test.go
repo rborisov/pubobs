@@ -26,6 +26,7 @@ func TestLoad_defaults(t *testing.T) {
 	require.Equal(t, time.Hour, cfg.CacheCheckInterval)
 	require.Equal(t, 3*time.Minute, cfg.GitCloneTimeout)
 	require.Equal(t, 25*time.Second, cfg.GitFetchTimeout)
+	require.Equal(t, 2*time.Minute, cfg.GitLocalOpTimeout)
 	require.Equal(t, float64(20), cfg.DiskWarnPct)
 	require.Equal(t, float64(5), cfg.DiskCritPct)
 	require.NotEmpty(t, cfg.RepoCacheDir)
@@ -67,4 +68,12 @@ func TestLoad_customGitFetchTimeout(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 	require.Equal(t, 10*time.Second, cfg.GitFetchTimeout)
+}
+
+func TestLoad_customGitLocalOpTimeout(t *testing.T) {
+	withRequiredEnv(t)
+	t.Setenv("PUBOBS_GIT_LOCAL_OP_TIMEOUT", "30s")
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, cfg.GitLocalOpTimeout)
 }

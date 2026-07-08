@@ -325,6 +325,19 @@ Prerequisites: Go 1.25+, Node 20+.
 
 The backend serves a bundled frontend (`backend/frontend/static/`) via `go:embed`, and its Docker image doesn't compile Go — `backend/Dockerfile` just copies a prebuilt binary from `backend/bin/`. That means **the binaries in `backend/bin/` are committed to git** and must be rebuilt and committed as part of any change that touches the frontend or backend source.
 
+> **Commit source and rebuilt binaries in two separate commits, never one.**
+> `make build` bakes `git rev-parse HEAD` into the binary as its self-update
+> version string (see the Makefile's `VERSION` comment). If you build the
+> binary and then commit it *together with* the source changes it reflects,
+> `HEAD` at build time was necessarily the *previous* commit — a commit can
+> never embed its own hash, since the hash is derived from a tree that
+> would have to include the binary's already-embedded value. The result is
+> a binary that silently ships the wrong (parent) version forever, with no
+> error anywhere — this has happened for real (commit `7baf844a`) and looks
+> exactly like "the deploy didn't take effect" even though the correct code
+> did ship. Follow the two-commit sequence below and run `make
+> check-version` before pushing to catch it if it recurs.
+
 1. Build the frontend (regenerates `backend/frontend/static/app.js`, embedded into the binary at compile time):
 
    ```bash
@@ -333,16 +346,24 @@ The backend serves a bundled frontend (`backend/frontend/static/`) via `go:embed
    npm run build
    ```
 
-2. Build the Linux binaries the Docker image copies in:
+2. Commit the source changes (including the rebuilt `backend/frontend/static/app.js`) on their own — **do not include `backend/bin/` in this commit.**
+
+3. Only now, with that commit as `HEAD`, build the Linux binaries the Docker image copies in:
 
    ```bash
    cd backend
    make build          # builds bin/pubobs-linux-amd64 and bin/pubobs-linux-arm64
    ```
 
-3. Commit the source changes *together with* the rebuilt `backend/frontend/static/app.js`, `backend/bin/pubobs-linux-amd64`, and `backend/bin/pubobs-linux-arm64`, then push to `main`.
+4. Commit *only* `backend/bin/pubobs-linux-amd64` and `backend/bin/pubobs-linux-arm64` in their own follow-up commit (conventionally titled `build: rebuild deployed binaries with <summary of step 2's change>`), then verify before pushing:
 
-4. Deploy by running the updater on the VPS — it pulls `main`, copies the new binary, rebuilds the Docker image, and restarts the container:
+   ```bash
+   make check-version  # fails loudly if the committed binaries don't embed this HEAD's SHA
+   ```
+
+5. Push both commits to `main`.
+
+6. Deploy by running the updater on the VPS — it pulls `main`, copies the new binary, rebuilds the Docker image, and restarts the container:
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/rborisov/pubobs/main/install.sh -o /tmp/pubobs-install.sh

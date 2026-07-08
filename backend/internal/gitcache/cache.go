@@ -77,6 +77,14 @@ func (c *Cache) SetGitTimeouts(cloneTimeout, fetchTimeout time.Duration) {
 	c.git.FetchTimeout = fetchTimeout
 }
 
+// SetLocalOpTimeout overrides how long any local-only git invocation (add,
+// commit, rev-parse, ls-files, show, etc. — never Clone/FetchReset/push) may
+// run before being killed and reported as ErrGitOpTimedOut. Pass 0 to leave
+// it at DefaultGitLocalOpTimeout.
+func (c *Cache) SetLocalOpTimeout(timeout time.Duration) {
+	c.git.LocalOpTimeout = timeout
+}
+
 // recentAuthFailure returns the cached error from a recent auth failure for
 // repoID, if one occurred within AuthFailBackoff, without touching git or
 // the network at all.
@@ -289,6 +297,7 @@ func clearStaleGitLocks(gitDir string) error {
 // credJSON is the decrypted credentials string (may be empty for public repos).
 // Returns the commit SHA.
 func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, files []SyncFile, assets []SyncAsset, deletedPaths []string, commitMsg string) (string, error) {
+	syncStart := time.Now()
 	lock := c.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -324,18 +333,34 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 	// (see handleSync) — the .md file itself lived on in the git remote
 	// forever, since git has no way to know it should be gone if it's never
 	// actually removed from disk here.
+	//
+	// This loop and the AddCommitPush call below log their own start/end and
+	// elapsed time (at least at debug granularity via Printf, matching this
+	// package's existing style) specifically so that a future silent
+	// process restart mid-Sync — the exact "no completed request log line"
+	// symptom this comment is a response to — leaves a clear trail of which
+	// phase was in flight, instead of a gap with no diagnostic signal at
+	// all.
+	if len(deletedPaths) > 0 {
+		log.Printf("gitcache: sync %s: removing %d deleted path(s) from working tree", repo.ID, len(deletedPaths))
+	}
 	for _, p := range deletedPaths {
 		fullPath := filepath.Join(dir, p)
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("gitcache: sync %s: remove %q failed: %v", repo.ID, p, err)
 			return "", fmt.Errorf("remove %s: %w", p, err)
 		}
 	}
 
+	commitStart := time.Now()
 	sha, err := c.git.AddCommitPush(dir, repo.RemoteURL, credJSON, repo.DefaultBranch, commitMsg)
 	c.recordGitOpResult(repo.ID, err)
 	if err != nil {
+		log.Printf("gitcache: sync %s: commit+push failed after %s: %v", repo.ID, time.Since(commitStart), err)
 		return "", fmt.Errorf("commit+push: %w", err)
 	}
+	log.Printf("gitcache: sync %s: committed %s in %s (total sync %s), %d file(s), %d asset(s), %d deletion(s)",
+		repo.ID, sha, time.Since(commitStart), time.Since(syncStart), len(files), len(assets), len(deletedPaths))
 	return sha, nil
 }
 

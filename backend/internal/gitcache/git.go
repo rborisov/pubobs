@@ -9,7 +9,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pubobs/backend/internal/model"
@@ -78,6 +80,20 @@ const DefaultGitCloneTimeout = 3 * time.Minute
 // Clone's longer one.
 const DefaultGitFetchTimeout = 25 * time.Second
 
+// DefaultGitLocalOpTimeout bounds every local-only git invocation (rev-parse,
+// add, commit, ls-files, show, ls-tree, log — anything that never talks to a
+// remote) that previously ran under an unbounded context.Background(). These
+// are normally sub-second even for a repo with dozens of changed/renamed/
+// deleted paths, so this exists purely as a safety net: without it, a local
+// git process that somehow wedges (e.g. filesystem-level contention, a huge
+// pathological diff) hangs the request goroutine forever with nothing to
+// show for it in the logs, indistinguishable from an external kill (OOM,
+// container restart) until it's already too late to tell the two apart.
+// Bounding it turns that silent hang into a loud, timestamped
+// ErrGitOpTimedOut instead — the whole point of this mechanism, mirroring
+// why DefaultGitCloneTimeout/DefaultGitFetchTimeout exist for network ops.
+const DefaultGitLocalOpTimeout = 2 * time.Minute
+
 // ErrGitAuthFailed signals that a git network operation (clone/fetch/push)
 // failed because the remote rejected (or could not obtain) credentials —
 // as opposed to a generic network error or local corruption. Distinguishing
@@ -134,16 +150,29 @@ func classifyGitError(err error) error {
 
 // GitRunner executes system git commands.
 type GitRunner struct {
-	// CloneTimeout bounds Clone specifically. Local-only operations
-	// (rev-parse, ls-files, show, etc.) are never subject to either timeout.
+	// CloneTimeout bounds Clone specifically.
 	CloneTimeout time.Duration
 	// FetchTimeout bounds FetchReset and push operations (InitializeIfEmpty,
 	// AddCommitPush) — everything network-facing except the initial Clone.
 	FetchTimeout time.Duration
+	// LocalOpTimeout bounds every local-only invocation (see
+	// DefaultGitLocalOpTimeout).
+	LocalOpTimeout time.Duration
+
+	// safeDirMu serializes trustDirectory's writes to the shared global
+	// gitconfig: different repos share one GitRunner, and `git config
+	// --global --add` is a read-modify-write against a single file that
+	// two concurrent invocations (for two different repos self-healing at
+	// once, e.g. right after an ownership reset) could otherwise race on.
+	safeDirMu sync.Mutex
 }
 
 func NewGitRunner() *GitRunner {
-	return &GitRunner{CloneTimeout: DefaultGitCloneTimeout, FetchTimeout: DefaultGitFetchTimeout}
+	return &GitRunner{
+		CloneTimeout:   DefaultGitCloneTimeout,
+		FetchTimeout:   DefaultGitFetchTimeout,
+		LocalOpTimeout: DefaultGitLocalOpTimeout,
+	}
 }
 
 // cloneTimeout returns the effective Clone timeout, falling back to the
@@ -162,6 +191,15 @@ func (g *GitRunner) fetchTimeout() time.Duration {
 		return g.FetchTimeout
 	}
 	return DefaultGitFetchTimeout
+}
+
+// localOpTimeout returns the effective local-op timeout, falling back to
+// the default if unset/invalid.
+func (g *GitRunner) localOpTimeout() time.Duration {
+	if g.LocalOpTimeout > 0 {
+		return g.LocalOpTimeout
+	}
+	return DefaultGitLocalOpTimeout
 }
 
 // credentialedURL injects credentials into an HTTPS remote URL if a PAT is provided.
@@ -222,8 +260,19 @@ func warnIfCredsUnusable(remoteURL, credJSON string, applied bool) {
 	}
 }
 
+// run executes a local-only git command (never touches the network),
+// bounded by localOpTimeout() so a wedged local process surfaces as an
+// explicit ErrGitOpTimedOut instead of hanging the caller indefinitely.
 func (g *GitRunner) run(dir string, args ...string) (string, error) {
-	return g.runCtx(context.Background(), dir, args...)
+	timeout := g.localOpTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	out, err := g.runCtx(ctx, dir, args...)
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("%w after %s: git %s: %v", ErrGitOpTimedOut, timeout, args[0], err)
+	}
+	return out, err
 }
 
 // runNetwork runs a git command that talks to a remote, bounded by timeout
@@ -299,15 +348,81 @@ func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	return err
 }
 
+// dubiousOwnershipMarker is the substring git (2.35.2+) prints when it
+// refuses to operate on a repository directory owned by a different user
+// than the process's effective UID ("detected dubious ownership in
+// repository at ..."). This is a *configuration* mismatch, not on-disk
+// corruption — retrying or wiping-and-recloning does nothing to fix it (the
+// new clone would immediately hit the exact same check), yet its exit
+// status/output shape is otherwise indistinguishable from any other git
+// failure to a naive "non-zero exit means unhealthy" check. Distinguishing
+// it matters in this app specifically: the backend container runs as root,
+// but its data volumes can easily end up owned by a different UID (e.g. a
+// leftover `chown` from an install/update flow written for an older,
+// non-root image revision), so this is not a hypothetical edge case here.
+const dubiousOwnershipMarker = "detected dubious ownership"
+
+// isDubiousOwnershipError reports whether err is git's dubious-ownership
+// rejection specifically, as opposed to any other failure (corruption,
+// missing objects, etc.). Split out from IsHealthy as its own pure function
+// so the classification itself — the exact thing that needs to distinguish
+// "config mismatch, self-heal and retry" from "actually corrupted, wipe and
+// re-clone" — is unit-testable without needing a real UID/ownership
+// mismatch, which generally requires root privileges to set up.
+func isDubiousOwnershipError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), dubiousOwnershipMarker)
+}
+
 // IsHealthy reports whether an existing local clone is in a usable state, by
 // checking that git can resolve HEAD to a real commit. A clone left behind by
 // an interrupted operation (e.g. disk exhaustion or a killed process mid-clone
 // or mid-fetch) can have a .git directory on disk that git itself can no
 // longer read — missing objects, a dangling HEAD, or an incomplete ref. This
 // is a cheap, local-only check: it never touches the network.
+//
+// A "dubious ownership" rejection (see dubiousOwnershipMarker) is handled
+// separately from genuine corruption: rather than reporting the clone
+// unhealthy (which would trigger a wasteful full re-clone that hits the
+// exact same ownership check immediately afterwards), this marks the
+// directory as a trusted git.safe.directory and retries once. Only a
+// still-failing retry — or any other kind of failure — is treated as real
+// corruption.
 func (g *GitRunner) IsHealthy(dir string) bool {
 	_, err := g.run(dir, "rev-parse", "--verify", "--quiet", "HEAD")
+	if err == nil {
+		return true
+	}
+	if !isDubiousOwnershipError(err) {
+		return false
+	}
+	log.Printf("gitcache: %s rejected by git as a dubious-ownership repository (owner mismatch, not corruption) — marking it as a trusted safe.directory and retrying", dir)
+	if trustErr := g.trustDirectory(dir); trustErr != nil {
+		log.Printf("gitcache: failed to mark %s as a safe.directory after a dubious-ownership rejection: %v", dir, trustErr)
+		return false
+	}
+	_, err = g.run(dir, "rev-parse", "--verify", "--quiet", "HEAD")
+	if err != nil {
+		log.Printf("gitcache: %s still unhealthy after marking it as a safe.directory: %v", dir, err)
+	}
 	return err == nil
+}
+
+// trustDirectory records dir in git's global safe.directory list so a
+// UID/ownership mismatch between the current process and the directory's
+// owner no longer blocks git operations against it. This is a targeted,
+// per-directory grant (as opposed to the blanket `safe.directory=*` this
+// image's Dockerfile also sets as the primary defense) so this code-level
+// self-heal is safe to keep even if that image-level configuration were
+// ever accidentally dropped.
+func (g *GitRunner) trustDirectory(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolve absolute path for %s: %w", dir, err)
+	}
+	g.safeDirMu.Lock()
+	defer g.safeDirMu.Unlock()
+	_, err = g.run("", "config", "--global", "--add", "safe.directory", abs)
+	return err
 }
 
 // FetchReset fetches the latest commit (depth=1) for branch and hard-resets to it.
