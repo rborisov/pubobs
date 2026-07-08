@@ -98,7 +98,7 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		user, _ := deps.Store.GetUserByID(r.Context(), claims.UserID)
 		commitMsg := fmt.Sprintf("pubobs: sync %s by %s", time.Now().UTC().Format(time.RFC3339), user.Email)
 
-		sha, err := deps.Cache.Sync(r.Context(), repo, credJSON, cacheFiles, cacheAssets, commitMsg)
+		sha, err := deps.Cache.Sync(r.Context(), repo, credJSON, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg)
 		if err != nil {
 			if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "rejected") {
 				writeError(w, http.StatusConflict, "push rejected: pull first, then sync")

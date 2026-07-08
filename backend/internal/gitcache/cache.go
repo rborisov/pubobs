@@ -285,10 +285,10 @@ func clearStaleGitLocks(gitDir string) error {
 	return nil
 }
 
-// Sync writes files to the cache, commits them, and pushes.
+// Sync writes files to the cache, removes deletedPaths, commits, and pushes.
 // credJSON is the decrypted credentials string (may be empty for public repos).
 // Returns the commit SHA.
-func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, files []SyncFile, assets []SyncAsset, commitMsg string) (string, error) {
+func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, files []SyncFile, assets []SyncAsset, deletedPaths []string, commitMsg string) (string, error) {
 	lock := c.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -315,6 +315,19 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 		}
 		if err := os.WriteFile(fullPath, a.Content, 0644); err != nil {
 			return "", fmt.Errorf("write asset %s: %w", a.Path, err)
+		}
+	}
+
+	// Remove files the plugin reports as deleted from the working tree so
+	// `git add -A` below actually stages the deletion. Without this, a
+	// deletedPaths entry only ever removed the DB row and render-store blob
+	// (see handleSync) — the .md file itself lived on in the git remote
+	// forever, since git has no way to know it should be gone if it's never
+	// actually removed from disk here.
+	for _, p := range deletedPaths {
+		fullPath := filepath.Join(dir, p)
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("remove %s: %w", p, err)
 		}
 	}
 

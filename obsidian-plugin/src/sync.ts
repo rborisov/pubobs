@@ -163,6 +163,19 @@ export class SyncManager {
           if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
             continue;
           }
+        } else if ((this.settings.syncHashes[repoId] ?? {})[file.path] !== undefined) {
+          // No local file exists at this path, but this vault previously
+          // pushed/owned it (it has a syncHashes entry). That combination
+          // means the file was deleted or renamed locally and the deletion
+          // just hasn't reached the remote yet (e.g. a prior push failed) —
+          // NOT that this is genuine new content authored elsewhere. Treat
+          // it as a pending deletion: don't resurrect it here, and drop any
+          // stale pull-SHA cache for it so we don't keep it around for a
+          // path we're intentionally no longer tracking. The push phase
+          // below will still see this path missing from the vault and
+          // re-attempt the deletion on the remote.
+          delete storedPullSHAs[file.path];
+          continue;
         }
 
         const required = parseFrontmatterPlugins(file.content)

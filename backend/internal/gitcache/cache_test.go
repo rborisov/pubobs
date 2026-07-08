@@ -28,7 +28,7 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 	files := []gitcache.SyncFile{
 		{Path: "newdoc.md", MDContent: "# New"},
 	}
-	sha, err := cache.Sync(context.Background(), repo, "", files, []gitcache.SyncAsset{}, "sync 2024-01-01 by alice")
+	sha, err := cache.Sync(context.Background(), repo, "", files, []gitcache.SyncAsset{}, nil, "sync 2024-01-01 by alice")
 	require.NoError(t, err)
 	require.NotEmpty(t, sha)
 
@@ -153,11 +153,74 @@ func TestCache_Sync_ClearsStaleLockFile(t *testing.T) {
 
 	_, err = cache.Sync(context.Background(), repo, "", []gitcache.SyncFile{
 		{Path: "second.md", MDContent: "# Second"},
-	}, []gitcache.SyncAsset{}, "sync 2024-01-02 by alice")
+	}, []gitcache.SyncAsset{}, nil, "sync 2024-01-02 by alice")
 	require.NoError(t, err, "Sync should clear a stale index.lock left by an interrupted process")
 
 	_, statErr := os.Stat(lockPath)
 	require.True(t, os.IsNotExist(statErr), "stale lock file should have been removed")
+}
+
+// TestCache_Sync_DeletesRemovedPaths is the regression test for a bug where
+// deletedPaths sent by the plugin were never actually removed from the git
+// working tree: Sync wrote/committed new files but silently ignored
+// deletedPaths, so `git add -A` had nothing to stage for the removal and the
+// old file lived on in the remote forever.
+func TestCache_Sync_DeletesRemovedPaths(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "r3",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	// hello.md was pushed by seedBareRepo — confirm it's visible first.
+	entries, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+	var pathsBefore []string
+	for _, e := range entries {
+		pathsBefore = append(pathsBefore, e.Path)
+	}
+	require.Contains(t, pathsBefore, "hello.md")
+
+	sha, err := cache.Sync(context.Background(), repo, "", nil, nil, []string{"hello.md"}, "sync: delete hello.md")
+	require.NoError(t, err)
+	require.NotEmpty(t, sha)
+
+	entries, err = cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err)
+	var pathsAfter []string
+	for _, e := range entries {
+		pathsAfter = append(pathsAfter, e.Path)
+	}
+	require.NotContains(t, pathsAfter, "hello.md", "deleted path must be removed from the git working tree and no longer listed")
+}
+
+// TestCache_Sync_DeletedPathAlreadyGone verifies a deletedPaths entry for a
+// file that doesn't actually exist on disk (e.g. already removed by a prior
+// partially-failed sync) is a harmless no-op rather than an error.
+func TestCache_Sync_DeletedPathAlreadyGone(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "r4",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	sha, err := cache.Sync(context.Background(), repo, "", nil, nil, []string{"never-existed.md"}, "sync: delete nonexistent path")
+	require.NoError(t, err)
+	require.NotEmpty(t, sha)
 }
 
 func TestCache_AppendComment(t *testing.T) {

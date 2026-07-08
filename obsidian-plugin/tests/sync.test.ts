@@ -272,6 +272,72 @@ describe('SyncManager.syncRepo', () => {
 
     await expect(manager.syncRepo('missing-repo')).rejects.toThrow('No folder mapping');
   });
+
+  // Regression tests for a real data-corruption bug: a file previously
+  // pushed by this vault (tracked in syncHashes) that was later deleted or
+  // renamed locally, but whose deletion never reached the remote (e.g. a
+  // prior push failed), must NOT be resurrected into the vault by the next
+  // pull. Before the fix, the pull phase only guarded against clobbering
+  // local edits when a local file *existed*; when it was absent entirely
+  // (the deleted/renamed case), it unconditionally recreated it from the
+  // stale remote copy — and once recreated, the push phase immediately
+  // after would see it back in the vault and stop treating it as deleted,
+  // permanently losing the deletion signal.
+  test('does not recreate a locally-deleted file this vault previously owned (syncHashes entry, no local file)', async () => {
+    const app = makeMockApp(); // no local files exist
+    const client = makeMockClient([
+      { path: 'notes/old-name.md', content: '# Old', sha: 'old-sha' },
+    ]);
+    const settings = makeSettings();
+    // This vault previously pushed notes/old-name.md (e.g. before it was
+    // renamed locally), but that push's deletion of the old path never
+    // reached the remote, so it's still listed there with a differing sha.
+    (settings as any).syncHashes = { 'repo-1': { 'notes/old-name.md': 'some-old-content-hash' } };
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.create).not.toHaveBeenCalled();
+    expect(app.vault.modify).not.toHaveBeenCalled();
+  });
+
+  test('still pulls a genuinely new remote-only path with no prior syncHashes entry', async () => {
+    const app = makeMockApp(); // no local files exist
+    const client = makeMockClient([
+      { path: 'notes/brand-new.md', content: '# New', sha: 'new-sha' },
+    ]);
+    const settings = makeSettings();
+    // No syncHashes entry at all for this path — this vault never owned it,
+    // so it's real new content added via git/another client and should
+    // still be pulled down normally.
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.create).toHaveBeenCalledWith('Published/notes/brand-new.md', '# New');
+    expect(settings.pullSHAs['repo-1']['notes/brand-new.md']).toBe('new-sha');
+  });
+
+  test('still skips pulling over unsynced local edits when the file exists locally', async () => {
+    const app = makeMockApp({ 'Published/notes/edited.md': true });
+    app.vault.read = jest.fn().mockResolvedValue('# Locally edited content');
+    const client = makeMockClient([
+      { path: 'notes/edited.md', content: '# Remote content', sha: 'remote-sha' },
+    ]);
+    const settings = makeSettings();
+    // lastSyncedHash won't match fnv1a of the current local content, since
+    // the local file has been edited since the last successful push.
+    (settings as any).syncHashes = { 'repo-1': { 'notes/edited.md': 'stale-hash-from-last-push' } };
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.modify).not.toHaveBeenCalled();
+    expect(app.vault.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('SyncManager key handling', () => {

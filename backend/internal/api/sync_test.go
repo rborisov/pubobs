@@ -14,6 +14,7 @@ import (
 
 	"github.com/pubobs/backend/internal/api"
 	"github.com/pubobs/backend/internal/gitcache"
+	"github.com/pubobs/backend/internal/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,6 +187,63 @@ func TestHandleSync_noteKeysIdempotent(t *testing.T) {
 	noteKeys2, _ := resp2["note_keys"].(map[string]any)
 	key2, _ := noteKeys2["notes/hello.md"].(string)
 	require.Equal(t, key1, key2, "repeated syncs of the same note must return the same key")
+}
+
+// TestHandleSync_deletedPathsRemovedFromGitAndDB is the end-to-end
+// regression test for a bug where a sync's deleted_paths only removed the
+// note's DB row and render-store blob, never the underlying .md file in the
+// repo's git storage — so a "deleted" note kept reappearing to every client
+// that pulled, because it was never actually gone from the remote.
+func TestHandleSync_deletedPathsRemovedFromGitAndDB(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	// First sync the note in so it has a DB row to delete.
+	createPayload := `{"files":[{"path":"hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{}}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(createPayload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "hello.md")
+	require.NoError(t, err)
+	require.NotNil(t, note)
+
+	// Now sync again with hello.md listed as deleted, and no files.
+	deletePayload := `{"files":[],"deleted_paths":["hello.md"]}`
+	req = httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(deletePayload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr = httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	entries, err := deps.Cache.ListFiles(ctx, mustGetRepo(t, deps, "r1"), "")
+	require.NoError(t, err)
+	var paths []string
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	require.NotContains(t, paths, "hello.md", "deleted_paths must be removed from the repo's git storage")
+
+	gotNote, err := deps.Store.GetNote(ctx, "r1", "hello.md")
+	require.NoError(t, err)
+	require.Nil(t, gotNote, "deleted_paths must remove the note's DB row")
+}
+
+func mustGetRepo(t *testing.T, deps *api.Deps, repoID string) *model.Repo {
+	t.Helper()
+	repo, err := deps.Store.GetRepo(context.Background(), repoID)
+	require.NoError(t, err)
+	require.NotNil(t, repo)
+	return repo
 }
 
 func TestHandleSync_writesAssetsToAssetStore(t *testing.T) {
