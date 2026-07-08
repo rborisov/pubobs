@@ -45,6 +45,49 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 	require.Contains(t, paths, "newdoc.md")
 }
 
+// TestCache_ListFiles_NonASCIIFilename is the end-to-end regression test for
+// the reported bug: a plugin pull-phase failure ("git show: exit status 128")
+// caused by git's default core.quotePath=true C-quoting/octal-escaping
+// non-ASCII paths in `git ls-files` output, which was then reused verbatim
+// (still quoted/escaped) as the <path> argument to `git show HEAD:<path>`.
+// This exercises the exact call chain from the bug report: Cache.ListFiles ->
+// GitRunner.ListFiles (ls-files) -> GitRunner.ReadFile (show) + BlobSHA (ls-tree).
+func TestCache_ListFiles_NonASCIIFilename(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	const nonASCIIName = "аппаратура.md"
+	work := t.TempDir()
+	runGit(t, work, "clone", bareURL, ".")
+	require.NoError(t, os.WriteFile(filepath.Join(work, nonASCIIName), []byte("# Equipment"), 0644))
+	runGit(t, work, "add", ".")
+	runGit(t, work, "commit", "-m", "add non-ascii file")
+	runGit(t, work, "push", "origin", "HEAD:main")
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+
+	repo := &model.Repo{
+		ID:             "non-ascii-repo",
+		RemoteURL:      bareURL,
+		EncryptedCreds: "",
+		DefaultBranch:  "main",
+	}
+
+	entries, err := cache.ListFiles(context.Background(), repo, "")
+	require.NoError(t, err, "ListFiles must not fail on a repo containing a non-ASCII filename")
+
+	var found *model.FileEntry
+	for i := range entries {
+		if entries[i].Path == nonASCIIName {
+			found = &entries[i]
+		}
+	}
+	require.NotNil(t, found, "non-ASCII filename should be listed with a correctly decoded UTF-8 path, not a quoted/escaped one")
+	require.Equal(t, "# Equipment", found.Content)
+	require.NotEmpty(t, found.SHA)
+}
+
 // TestCache_ListFiles_RecoversFromCorruptedClone simulates a local clone left
 // in a corrupted state by an interrupted git operation (e.g. disk exhaustion
 // mid-fetch, or a killed process) — .git exists on disk but HEAD points at a

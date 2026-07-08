@@ -73,7 +73,6 @@ func TestAddCommitPush(t *testing.T) {
 	require.Len(t, sha, 40)
 }
 
-
 func TestFetchReset(t *testing.T) {
 	bareURL := newBareRepo(t)
 	seedBareRepo(t, bareURL)
@@ -100,6 +99,43 @@ func TestFetchReset(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, strings.TrimSpace(string(remoteHead)), strings.TrimSpace(string(localHead)),
 		"local HEAD should match remote HEAD after FetchReset")
+}
+
+// TestListFiles_NonASCIIFilename guards against git's default
+// core.quotePath=true behavior, which C-quotes and octal-escapes paths
+// containing non-ASCII bytes in porcelain output (e.g. `git ls-files`
+// without -z would print "аппаратура.md" as
+// `"\320\260\320\277\320\277\320\260\321\200\320\260\321\202\321\203\321\200\320\260.md"`,
+// literal surrounding quotes included). ListFiles must return the real,
+// unescaped UTF-8 filename, and that filename must work unmodified as input
+// to ReadFile (`git show HEAD:<path>`) and BlobSHA (`git ls-tree ... -- <path>`).
+func TestListFiles_NonASCIIFilename(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	const nonASCIIName = "аппаратура.md"
+	work := t.TempDir()
+	runGit(t, work, "clone", bareURL, ".")
+	require.NoError(t, os.WriteFile(filepath.Join(work, nonASCIIName), []byte("# Equipment"), 0644))
+	runGit(t, work, "add", ".")
+	runGit(t, work, "commit", "-m", "add non-ascii file")
+	runGit(t, work, "push", "origin", "HEAD:main")
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	files, err := g.ListFiles(cloneDir)
+	require.NoError(t, err)
+	require.Contains(t, files, nonASCIIName, "ListFiles must return the raw UTF-8 filename, not a quoted/octal-escaped form")
+
+	content, err := g.ReadFile(cloneDir, nonASCIIName)
+	require.NoError(t, err, "git show HEAD:<path> must succeed for a path returned by ListFiles")
+	require.Equal(t, "# Equipment", content)
+
+	sha, err := g.BlobSHA(cloneDir, nonASCIIName)
+	require.NoError(t, err)
+	require.Len(t, sha, 40)
 }
 
 func TestInitializeIfEmpty_emptyRepo(t *testing.T) {

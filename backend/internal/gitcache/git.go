@@ -144,15 +144,37 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message stri
 }
 
 // ListFiles returns all tracked .md file paths relative to the repo root.
+//
+// Uses -z (NUL-delimited output) rather than parsing plain newline-separated
+// output. Without -z, git applies its default core.quotePath=true behavior:
+// any path containing non-ASCII bytes (or other "unusual" characters) gets
+// C-style-quoted and octal-escaped, e.g. а filename "аппаратура.md" would be
+// printed as `"\320\260\320\277\320\277\320\260\321\200\320\260\321\202\321\203\321\200\320\260.md"`
+// (literal surrounding quote characters plus octal escapes). Since that
+// output was previously split on plain newlines with no unquoting/unescaping
+// step, non-ASCII filenames came back garbled from ListFiles itself, and
+// later got passed as-is into `git show HEAD:<path>` (ReadFile) and
+// `git ls-tree ... -- <path>` (BlobSHA), which fail outright because no file
+// actually has literal quote characters in its name. -z sidesteps the whole
+// quoting/escaping class of bugs (non-ASCII, embedded quotes/backslashes,
+// etc.) by having git emit raw bytes with NUL terminators instead.
 func (g *GitRunner) ListFiles(dir string) ([]string, error) {
-	out, err := g.run(dir, "ls-files", "--", "*.md")
+	out, err := g.run(dir, "ls-files", "-z", "--", "*.md")
 	if err != nil {
 		return nil, err
 	}
+	out = strings.TrimSuffix(out, "\x00")
 	if out == "" {
 		return nil, nil
 	}
-	return strings.Split(out, "\n"), nil
+	parts := strings.Split(out, "\x00")
+	files := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files, nil
 }
 
 // ReadFile returns the content of a tracked file at HEAD.
