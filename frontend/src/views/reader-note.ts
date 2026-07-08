@@ -1,4 +1,7 @@
-import { pubGetNote, pubListComments, addComment, type PubNoteDetail, type PubComment } from '../api';
+import {
+  pubGetNote, pubListComments, addComment, mintShareLink, revokeShareLink,
+  type PubNoteDetail, type PubComment, type ShareMode,
+} from '../api';
 import { isAuthenticated } from '../auth';
 import { ensureReaderStyles } from '../reader-styles';
 import { loadingRow } from '../spinner';
@@ -6,11 +9,18 @@ import { loadingRow } from '../spinner';
 export async function readerNoteView(repoId: string, rawNotePath: string): Promise<HTMLElement> {
   ensureReaderStyles();
 
-  // Decode %20 etc. that browsers add when pasting URLs, then split off the key
-  const decoded = decodeURIComponent(rawNotePath);
-  const ampIdx = decoded.lastIndexOf('&');
-  const notePath = ampIdx !== -1 ? decoded.slice(0, ampIdx) : decoded;
-  const urlKey  = ampIdx !== -1 ? decoded.slice(ampIdx + 1) : undefined;
+  // The route is registered as '/read/:repoId/*', so rawNotePath is
+  // everything after "repoId/" in the hash, e.g. "docs/note.md?key=xyz".
+  // Split on the FIRST '?' (standard URL semantics) before decoding anything,
+  // so a note path containing '&' or other characters the old "&key"-suffix
+  // scheme relied on splitting by can no longer corrupt parsing — only a
+  // literal '?' ends the path, and everything after it is parsed as a real
+  // query string via URLSearchParams rather than manual index math.
+  const qIdx = rawNotePath.indexOf('?');
+  const rawPath = qIdx !== -1 ? rawNotePath.slice(0, qIdx) : rawNotePath;
+  const rawQuery = qIdx !== -1 ? rawNotePath.slice(qIdx + 1) : '';
+  const notePath = decodeURIComponent(rawPath);
+  const urlKey = new URLSearchParams(rawQuery).get('key') ?? undefined;
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:40px 24px;font-family:system-ui,sans-serif';
@@ -47,19 +57,13 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     return wrap;
   }
 
-  // If no key was in the URL, fall back to the key embedded in the note's frontmatter.
-  // This lets authenticated users view notes when navigating directly rather than via share link.
-  let effectiveKey = urlKey;
-  if (!effectiveKey) {
-    const pubobsUrl = (note.frontmatter?.['pubobs-url'] as string | undefined) ?? '';
-    const i = pubobsUrl.lastIndexOf('&');
-    if (i !== -1) {
-      effectiveKey = pubobsUrl.slice(i + 1);
-    } else {
-      // Legacy format: key stored as a separate frontmatter field
-      effectiveKey = (note.frontmatter?.['pubobs-render-key'] as string | undefined);
-    }
-  }
+  // The URL's ?key= param is the ONLY source of a decryption key — there is
+  // no frontmatter fallback. The backend fully owns key issuance now (see
+  // GetOrCreateNoteKey/SetNoteShared); a frontend fallback to a
+  // frontmatter-embedded key was the other half of the original leak this
+  // phase closes; restoring it would let a stale, no-longer-valid key
+  // embedded in old note content work again regardless of share state.
+  const effectiveKey = urlKey;
 
   const back = document.createElement('a');
   back.href = `#/read/${repoId}`;
@@ -93,20 +97,12 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     meta.appendChild(badge);
   }
 
-  const copyBtn = document.createElement('button');
-  copyBtn.textContent = 'Copy link';
-  copyBtn.className = 'r-btn-ghost';
-  copyBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px;margin-left:auto';
-  copyBtn.addEventListener('click', () => {
-    const url = effectiveKey
-      ? `${location.origin}/#/read/${repoId}/${notePath}&${effectiveKey}`
-      : `${location.origin}/#/read/${repoId}/${notePath}`;
-    navigator.clipboard.writeText(url).then(() => {
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
-    });
-  });
-  meta.appendChild(copyBtn);
+  // Sharing controls are editor/admin-only — an empty/guest role (anonymous
+  // guest-open visitor OR a share-link-only visitor) never even sees a
+  // button, so as not to visually imply sharing is possible for them.
+  if (note.role === 'editor' || note.role === 'admin') {
+    meta.appendChild(buildShareControl(repoId, notePath, note));
+  }
 
   article.appendChild(meta);
 
@@ -170,6 +166,107 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   wrap.appendChild(commentsSection);
   const commentsList = commentsSection.querySelector(`#comments-list-${note.id}`) as HTMLElement;
   loadComments(repoId, notePath, commentsList);
+
+  return wrap;
+}
+
+// buildShareControl renders a small popover offering the two canonical share
+// links plus (when currently shared) a revoke action. Only ever called for
+// editor/admin viewers — see the role check at the call site.
+function buildShareControl(repoId: string, notePath: string, note: PubNoteDetail): HTMLElement {
+  let shared = note.shared_publicly;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'r-share-wrap';
+  wrap.style.marginLeft = 'auto';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'r-btn-ghost';
+  toggleBtn.style.cssText = 'font-size:0.75rem;padding:2px 8px';
+  toggleBtn.textContent = shared ? 'Shared ▾' : 'Share ▾';
+  wrap.appendChild(toggleBtn);
+
+  let menu: HTMLElement | null = null;
+
+  function closeMenu(): void {
+    menu?.remove();
+    menu = null;
+    document.removeEventListener('click', onDocClick, true);
+  }
+
+  function onDocClick(e: MouseEvent): void {
+    if (menu && !wrap.contains(e.target as Node)) closeMenu();
+  }
+
+  async function copyURL(url: string, item: HTMLElement, label: string): Promise<void> {
+    await navigator.clipboard.writeText(url);
+    item.textContent = 'Copied!';
+    setTimeout(() => { item.textContent = label; }, 1200);
+  }
+
+  async function doMint(mode: ShareMode, item: HTMLElement, label: string): Promise<void> {
+    item.textContent = 'Copying…';
+    try {
+      const resp = await mintShareLink(repoId, notePath, mode);
+      const base = `${location.origin}/#/read/${repoId}/${notePath}`;
+      const url = mode === 'public' && resp.key ? `${base}?key=${resp.key}` : base;
+      if (resp.shared) {
+        shared = true;
+        toggleBtn.textContent = 'Shared ▾';
+      }
+      await copyURL(url, item, label);
+      closeMenu();
+    } catch (e: unknown) {
+      item.textContent = e instanceof Error ? e.message : String(e);
+      setTimeout(() => { item.textContent = label; }, 2000);
+    }
+  }
+
+  function openMenu(): void {
+    if (menu) { closeMenu(); return; }
+    menu = document.createElement('div');
+    menu.className = 'r-share-menu';
+
+    const restrictedLabel = 'Copy link (people with access)';
+    const restrictedItem = document.createElement('button');
+    restrictedItem.className = 'r-share-menu-item';
+    restrictedItem.textContent = restrictedLabel;
+    restrictedItem.addEventListener('click', () => void doMint('restricted', restrictedItem, restrictedLabel));
+    menu.appendChild(restrictedItem);
+
+    const publicLabel = 'Copy link (anyone with the link)';
+    const publicItem = document.createElement('button');
+    publicItem.className = 'r-share-menu-item';
+    publicItem.textContent = publicLabel;
+    publicItem.addEventListener('click', () => void doMint('public', publicItem, publicLabel));
+    menu.appendChild(publicItem);
+
+    if (shared) {
+      const revokeLabel = 'Stop sharing';
+      const revokeItem = document.createElement('button');
+      revokeItem.className = 'r-share-menu-item r-share-revoke';
+      revokeItem.textContent = revokeLabel;
+      revokeItem.addEventListener('click', async () => {
+        revokeItem.textContent = 'Revoking…';
+        try {
+          await revokeShareLink(repoId, notePath);
+          shared = false;
+          toggleBtn.textContent = 'Share ▾';
+          closeMenu();
+        } catch (e: unknown) {
+          revokeItem.textContent = e instanceof Error ? e.message : String(e);
+          setTimeout(() => { revokeItem.textContent = revokeLabel; }, 2000);
+        }
+      });
+      menu.appendChild(revokeItem);
+    }
+
+    wrap.appendChild(menu);
+    // Deferred so the click that opened the menu doesn't immediately close it.
+    setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
+  }
+
+  toggleBtn.addEventListener('click', openMenu);
 
   return wrap;
 }

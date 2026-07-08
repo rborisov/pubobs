@@ -94,6 +94,25 @@ export function ensureReaderStyles(): void {
     .r-btn-ghost:hover { background: var(--r-border, #e2e8f0); }
     .r-error { color: var(--r-error); }
     .r-link { color: var(--r-link); }
+    .r-share-wrap { position: relative; display: inline-block; }
+    .r-share-menu {
+      position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
+      background: var(--r-bg); border: 1px solid var(--r-border); border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 6px; min-width: 240px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .r-share-menu-item {
+      display: block; width: 100%; text-align: left; padding: 8px 10px; border-radius: 5px;
+      border: none; background: transparent; color: var(--r-text); font-size: 0.8rem;
+      cursor: pointer; font-family: inherit;
+    }
+    .r-share-menu-item:hover { background: var(--r-hover-bg); }
+    .r-share-menu-item.r-share-revoke { color: var(--r-error); }
+    .r-share-badge {
+      font-size: 0.7rem; padding: 2px 8px; border-radius: 999px;
+      background: var(--r-tag-bg); color: var(--r-tag-text); white-space: nowrap;
+    }
+    .r-note-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 12px; }
     .markdown-rendered table {
       border-collapse: collapse !important; width: 100%; margin: 1.5em 0;
       font-size: 0.9em;

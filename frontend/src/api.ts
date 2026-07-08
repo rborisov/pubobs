@@ -325,6 +325,7 @@ export interface PubNote {
   title: string;
   tags: string[];
   synced_at: string;
+  shared_publicly: boolean;
 }
 
 export interface PubRepo {
@@ -342,6 +343,11 @@ export interface PubNoteDetail {
   git_commit_sha: string;
   synced_at: string;
   backlinks: Array<{ path: string; title: string }>;
+  shared_publicly: boolean;
+  // "" whenever the caller isn't a real repo member (anonymous guest-open
+  // visitor, or a share-link-only visitor) — only "editor"/"admin" should
+  // ever see sharing controls.
+  role: string;
 }
 
 // pubFetch attaches a Bearer token when the user is logged in so private repos
@@ -355,12 +361,48 @@ async function pubFetch(input: string): Promise<Response> {
   return fetchWithTimeout(input);
 }
 
-export async function pubListNotes(repoId: string): Promise<{ repo: PubRepo; notes: PubNote[] }> {
+export interface PubListNotesResponse {
+  repo: PubRepo;
+  notes: PubNote[];
+  // Repo-level role, applies to every row — "" (guest) for anonymous
+  // guest-open visitors. Never a share-link-only marker here: this endpoint
+  // only ever grants access via repo-level pubRepoAccess.
+  role: string;
+}
+
+export async function pubListNotes(repoId: string): Promise<PubListNotesResponse> {
   return json(await pubFetch(`/pub/${repoId}`));
 }
 
 export async function pubGetNote(repoId: string, notePath: string): Promise<PubNoteDetail> {
   return json(await pubFetch(`/pub/${repoId}/notes/${notePath}`));
+}
+
+export type ShareMode = 'restricted' | 'public';
+
+export interface ShareLinkResponse {
+  shared: boolean;
+  path: string;
+  key?: string;
+}
+
+// mintShareLink and revokeShareLink hit the same /api/repos/{id}/notes/*
+// namespace as addComment above, so they pass notePath through unencoded —
+// matching that existing precedent for note-path-containing URLs.
+export async function mintShareLink(repoId: string, notePath: string, mode: ShareMode): Promise<ShareLinkResponse> {
+  const resp = await authedFetch(`/api/repos/${repoId}/notes/${notePath}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  return json<ShareLinkResponse>(resp);
+}
+
+export async function revokeShareLink(repoId: string, notePath: string): Promise<{ shared: boolean }> {
+  const resp = await authedFetch(`/api/repos/${repoId}/notes/${notePath}/unshare`, {
+    method: 'POST',
+  });
+  return json<{ shared: boolean }>(resp);
 }
 
 export interface PubComment {

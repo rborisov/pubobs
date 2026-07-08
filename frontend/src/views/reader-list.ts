@@ -1,4 +1,4 @@
-import { pubListNotes, type PubNote, type PubRepo, type Me } from '../api';
+import { pubListNotes, mintShareLink, revokeShareLink, type PubNote, type Me } from '../api';
 import { ensureReaderStyles } from '../reader-styles';
 
 interface ViewState {
@@ -198,11 +198,78 @@ function renderTagList(
   return wrap;
 }
 
+// buildRowShareActions renders the per-row "Copy link" / "Shared" badge /
+// "Revoke" controls for editor/admin viewers. Defaults to the canonical
+// "restricted" (people-with-access) link — the fuller mode-choice dialog
+// lives on the note's own page, not cluttering every row of a long list.
+function buildRowShareActions(repoId: string, note: PubNote): HTMLElement {
+  const actions = document.createElement('div');
+  actions.className = 'r-note-row-actions';
+
+  const badge = document.createElement('span');
+  badge.className = 'r-share-badge';
+  badge.textContent = 'Shared';
+  badge.style.display = note.shared_publicly ? '' : 'none';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'r-btn-ghost';
+  copyBtn.style.cssText = 'font-size:0.7rem;padding:1px 6px';
+  copyBtn.textContent = 'Copy link';
+
+  const revokeBtn = document.createElement('button');
+  revokeBtn.className = 'r-btn-ghost';
+  revokeBtn.style.cssText = 'font-size:0.7rem;padding:1px 6px';
+  revokeBtn.textContent = 'Revoke';
+  revokeBtn.style.display = note.shared_publicly ? '' : 'none';
+
+  copyBtn.addEventListener('click', (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    copyBtn.textContent = 'Copying…';
+    mintShareLink(repoId, note.path, 'restricted')
+      .then(() => navigator.clipboard.writeText(`${location.origin}/#/read/${repoId}/${note.path}`))
+      .then(() => {
+        note.shared_publicly = true;
+        badge.style.display = '';
+        revokeBtn.style.display = '';
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1200);
+      })
+      .catch((err: unknown) => {
+        copyBtn.textContent = err instanceof Error ? err.message : String(err);
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 2000);
+      });
+  });
+
+  revokeBtn.addEventListener('click', (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    revokeBtn.textContent = 'Revoking…';
+    revokeShareLink(repoId, note.path)
+      .then(() => {
+        note.shared_publicly = false;
+        badge.style.display = 'none';
+        revokeBtn.style.display = 'none';
+        revokeBtn.textContent = 'Revoke';
+      })
+      .catch((err: unknown) => {
+        revokeBtn.textContent = err instanceof Error ? err.message : String(err);
+        setTimeout(() => { revokeBtn.textContent = 'Revoke'; }, 2000);
+      });
+  });
+
+  actions.appendChild(badge);
+  actions.appendChild(copyBtn);
+  actions.appendChild(revokeBtn);
+  return actions;
+}
+
 function renderNoteList(
   container: HTMLElement,
   notes: PubNote[],
   repoId: string,
   state: ViewState,
+  canManageSharing: boolean,
 ): void {
   container.innerHTML = '';
 
@@ -271,13 +338,22 @@ function renderNoteList(
         left.appendChild(tagRow);
       }
 
+      const right = document.createElement('div');
+      right.style.cssText = 'display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:16px';
+
       const dateSpan = document.createElement('span');
       dateSpan.className = 'r-note-link-date';
+      dateSpan.style.marginLeft = '0';
       dateSpan.textContent = note.synced_at
         ? new Date(note.synced_at).toLocaleDateString() : '';
+      right.appendChild(dateSpan);
+
+      if (canManageSharing) {
+        right.appendChild(buildRowShareActions(repoId, note));
+      }
 
       a.appendChild(left);
-      a.appendChild(dateSpan);
+      a.appendChild(right);
       container.appendChild(a);
     }
   }
@@ -289,7 +365,7 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:1100px;margin:0 auto;padding:32px 24px;font-family:system-ui,sans-serif';
 
-  let data: { repo: PubRepo; notes: PubNote[] };
+  let data: Awaited<ReturnType<typeof pubListNotes>>;
   try {
     data = await pubListNotes(repoId);
   } catch (e: unknown) {
@@ -297,7 +373,8 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
     return wrap;
   }
 
-  const { repo, notes } = data;
+  const { repo, notes, role } = data;
+  const canManageSharing = role === 'editor' || role === 'admin';
   const state: ViewState = { folder: '', tag: null, query: '', openFolders: new Set() };
   const allTags = collectTags(notes);
   const folderTree = buildFolderTree(notes);
@@ -398,7 +475,7 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
     }));
 
     // Note list
-    renderNoteList(noteListEl, filtered, repoId, state);
+    renderNoteList(noteListEl, filtered, repoId, state, canManageSharing);
   }
 
   searchInput.addEventListener('input', () => {
