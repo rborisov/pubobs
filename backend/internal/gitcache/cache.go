@@ -364,6 +364,22 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 	return sha, nil
 }
 
+// ListFilePaths returns all tracked .md file paths in the repo without
+// reading file contents. Prefer this over ListFiles when only path
+// membership is needed (e.g. filtering a notes list).
+func (c *Cache) ListFilePaths(ctx context.Context, repo *model.Repo, credJSON string) ([]string, error) {
+	lock := c.repoLock(repo.ID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	dir, err := c.getOrClone(repo, credJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.git.ListFiles(dir)
+}
+
 // ListFiles returns all .md files in the repo with their content and blob SHA.
 func (c *Cache) ListFiles(ctx context.Context, repo *model.Repo, credJSON string) ([]model.FileEntry, error) {
 	lock := c.repoLock(repo.ID)

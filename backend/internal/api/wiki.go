@@ -19,7 +19,18 @@ func handleListNotes(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
 		notes, err := deps.Store.ListNotes(r.Context(), repoID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list notes failed")
+			return
+		}
+		notes, err = reconcileNotesWithGit(r.Context(), deps, repo, notes)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "list notes failed")
 			return

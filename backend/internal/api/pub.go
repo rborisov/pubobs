@@ -123,6 +123,11 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "list notes failed")
 			return
 		}
+		notes, err = reconcileNotesWithGit(r.Context(), deps, repo, notes)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list notes failed")
+			return
+		}
 
 		type noteItem struct {
 			ID             string   `json:"id"`
