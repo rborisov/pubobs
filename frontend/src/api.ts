@@ -374,8 +374,9 @@ export async function pubListNotes(repoId: string): Promise<PubListNotesResponse
   return json(await pubFetch(`/pub/${repoId}`));
 }
 
-export async function pubGetNote(repoId: string, notePath: string): Promise<PubNoteDetail> {
-  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}`));
+export async function pubGetNote(repoId: string, notePath: string, key?: string): Promise<PubNoteDetail> {
+  const qs = key ? `?key=${encodeURIComponent(key)}` : '';
+  return json(await pubFetch(`/pub/${repoId}/notes/${notePath}${qs}`));
 }
 
 export type ShareMode = 'restricted' | 'public';

@@ -49,7 +49,10 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
 
   let note: PubNoteDetail;
   try {
-    note = await pubGetNote(repoId, notePath);
+    // Pass the share key through to the metadata fetch — on a guest-closed
+    // repo, pubNoteAccess only grants access when ?key= matches, so omitting
+    // it here yields a 404 for share-link-only visitors.
+    note = await pubGetNote(repoId, notePath, urlKey);
   } catch (e: unknown) {
     wrap.innerHTML = `
       <a href="#/read/${repoId}" class="r-muted" style="font-size:0.875rem;text-decoration:none">← Back</a>
