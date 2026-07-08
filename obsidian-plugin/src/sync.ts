@@ -163,17 +163,19 @@ export class SyncManager {
           if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
             continue;
           }
-        } else if ((this.settings.syncHashes[repoId] ?? {})[file.path] !== undefined) {
+        } else if (
+          (this.settings.syncHashes[repoId] ?? {})[file.path] !== undefined
+          || (this.settings.pullSHAs[repoId] ?? {})[file.path] !== undefined
+        ) {
           // No local file exists at this path, but this vault previously
-          // pushed/owned it (it has a syncHashes entry). That combination
-          // means the file was deleted or renamed locally and the deletion
-          // just hasn't reached the remote yet (e.g. a prior push failed) —
-          // NOT that this is genuine new content authored elsewhere. Treat
-          // it as a pending deletion: don't resurrect it here, and drop any
-          // stale pull-SHA cache for it so we don't keep it around for a
-          // path we're intentionally no longer tracking. The push phase
-          // below will still see this path missing from the vault and
-          // re-attempt the deletion on the remote.
+          // pushed or pulled it (syncHashes / pullSHAs entry). That means
+          // the file was deleted or renamed locally and the deletion just
+          // hasn't reached the remote yet (e.g. a prior push failed) — NOT
+          // that this is genuine new content authored elsewhere. Treat it as
+          // a pending deletion: don't resurrect it here, and drop any stale
+          // pull-SHA cache for it. The push phase below will still see this
+          // path missing from the vault and re-attempt the deletion on the
+          // remote.
           delete storedPullSHAs[file.path];
           continue;
         }
@@ -304,13 +306,28 @@ export class SyncManager {
     }
     notice.hide();
 
-    // Paths that were previously synced but no longer exist in the vault
-    const deletedPaths = Object.keys(storedHashes).filter(p => !currentRepoPaths.has(p));
+    // Paths this vault previously pushed, pulled, or minted a key for but
+    // that no longer exist locally — must be reported as deletions even
+    // when syncHashes is empty (e.g. a pulled-then-deleted file never got
+    // a push hash).
+    const knownPaths = new Set<string>(Object.keys(storedHashes));
+    for (const p of Object.keys(this.settings.pullSHAs[repoId] ?? {})) {
+      knownPaths.add(p);
+    }
+    for (const p of Object.keys(this.settings.noteKeys?.[repoId] ?? {})) {
+      knownPaths.add(p);
+    }
+    const deletedPaths = [...knownPaths].filter(p => !currentRepoPaths.has(p));
 
-    // Remove cached note keys for notes that no longer exist
+    // Remove cached state for notes that no longer exist
     if (this.settings.noteKeys?.[repoId]) {
       for (const p of deletedPaths) {
         delete this.settings.noteKeys[repoId][p];
+      }
+    }
+    for (const p of deletedPaths) {
+      if (this.settings.pullSHAs[repoId]) {
+        delete this.settings.pullSHAs[repoId][p];
       }
     }
 

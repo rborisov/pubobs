@@ -188,14 +188,21 @@ describe('parseFrontmatterPlugins', () => {
 describe('SyncManager.syncRepo', () => {
   function makeMockApp(vaultFiles: Record<string, boolean> = {}) {
     const TFileMock = (jest.requireMock('obsidian') as any).TFile;
+    const livePaths = new Set(Object.keys(vaultFiles).filter(k => vaultFiles[k]));
+    const makeFile = (path: string) => {
+      const base = path.slice(path.lastIndexOf('/') + 1);
+      return { path, extension: 'md', basename: base.replace(/\.md$/, '') };
+    };
     return {
       vault: {
-        getFiles: jest.fn().mockReturnValue([]),
+        getFiles: jest.fn().mockImplementation(() => [...livePaths].map(makeFile)),
         getAbstractFileByPath: jest.fn((path: string) => {
-          if (vaultFiles[path]) return new TFileMock();
+          if (livePaths.has(path)) return new TFileMock();
           return null;
         }),
-        create: jest.fn().mockResolvedValue(undefined),
+        create: jest.fn().mockImplementation(async (path: string) => {
+          livePaths.add(path);
+        }),
         modify: jest.fn().mockResolvedValue(undefined),
         createFolder: jest.fn().mockResolvedValue(undefined),
         read: jest.fn().mockResolvedValue(''),
@@ -354,6 +361,35 @@ describe('SyncManager.syncRepo', () => {
 
     expect(app.vault.modify).not.toHaveBeenCalled();
     expect(app.vault.create).not.toHaveBeenCalled();
+  });
+
+  test('does not recreate a locally-deleted file this vault previously pulled (pullSHAs entry, no local file)', async () => {
+    const app = makeMockApp(); // no local files exist
+    const client = makeMockClient([
+      { path: 'notes/pulled-then-deleted.md', content: '# Pulled', sha: 'new-remote-sha' },
+    ]);
+    const settings = makeSettings({ 'repo-1': { 'notes/pulled-then-deleted.md': 'old-pull-sha' } });
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.create).not.toHaveBeenCalled();
+    expect(app.vault.modify).not.toHaveBeenCalled();
+  });
+
+  test('sends deleted_paths for a pulled-then-deleted file even without syncHashes entry', async () => {
+    const app = makeMockApp(); // file deleted locally
+    const client = makeMockClient([]);
+    const settings = makeSettings({ 'repo-1': { 'notes/pulled-then-deleted.md': 'pull-sha' } });
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    expect(client.sync).toHaveBeenCalled();
+    const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
+    expect(deletedPaths).toContain('notes/pulled-then-deleted.md');
   });
 });
 
