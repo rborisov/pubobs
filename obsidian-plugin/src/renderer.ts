@@ -24,7 +24,7 @@ export async function renderNoteToHTML(
   repoId: string,
   vaultFolder: string,
   subfolder: string,
-  renderKeys?: Record<string, string>,
+  noteKeys?: Record<string, string>,
 ): Promise<RenderedNote> {
   const container = document.createElement('div');
   // Deliberately NOT positioned far off-viewport (e.g. left:-9999px): Chromium
@@ -59,7 +59,7 @@ export async function renderNoteToHTML(
     }
 
     // Rewrite internal links in the DOM (safe — only changes href, no resource loading)
-    rewriteInternalLinks(app, container, sourcePath, repoId, vaultFolder, subfolder, renderKeys);
+    rewriteInternalLinks(app, container, sourcePath, repoId, vaultFolder, subfolder, noteKeys);
 
     // Forward Obsidian's image sizing to the <img> as inline styles.
     // ![[image.jpg|400]] sets width="400" on span.internal-embed; without this the
@@ -170,7 +170,7 @@ function rewriteInternalLinks(
   repoId: string,
   vaultFolder: string,
   subfolder: string,
-  renderKeys?: Record<string, string>,
+  noteKeys?: Record<string, string>,
 ): void {
   for (const a of Array.from(container.querySelectorAll<HTMLAnchorElement>('a.internal-link'))) {
     const dataHref = a.getAttribute('data-href') ?? '';
@@ -185,8 +185,11 @@ function rewriteInternalLinks(
     if (subfolder) {
       repoPath = `${subfolder.replace(/\/$/, '')}/${repoPath}`;
     }
-    const key = renderKeys?.[repoPath];
-    a.href = key ? `#/read/${repoId}/${repoPath}&${key}` : `#/read/${repoId}/${repoPath}`;
+    // Only ever a key we already have cached for the TARGET note (e.g. it
+    // was synced earlier) — a target not yet synced simply gets a keyless
+    // link, same as before.
+    const key = noteKeys?.[repoPath];
+    a.href = key ? `#/read/${repoId}/${repoPath}?key=${key}` : `#/read/${repoId}/${repoPath}`;
     a.removeAttribute('data-href');
     a.classList.remove('internal-link');
   }

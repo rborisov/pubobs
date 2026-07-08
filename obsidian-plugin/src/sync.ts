@@ -98,15 +98,6 @@ class IncompatibleNotesModal extends Modal {
 
 // ── Encryption helpers ────────────────────────────────────────────────────────
 
-function base64urlEncode(data: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < data.byteLength; i++) binary += String.fromCharCode(data[i]);
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
 function base64urlDecode(s: string): Uint8Array {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
   const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
@@ -125,22 +116,6 @@ async function encryptHTML(html: string, keyBytes: Uint8Array): Promise<string> 
   blob.set(iv, 0);
   blob.set(new Uint8Array(ciphertext), 12);
   return bufferToBase64(blob.buffer);
-}
-
-function injectFrontmatterFields(content: string, fields: Record<string, string>): string {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (fmMatch) {
-    let fm: Record<string, unknown>;
-    try { fm = (parseYaml(fmMatch[1]) as Record<string, unknown>) ?? {}; }
-    catch { fm = {}; }
-    for (const [k, v] of Object.entries(fields)) fm[k] = v;
-    const fmStr = stringifyYaml(fm);
-    return `---\n${fmStr}---\n${content.slice(fmMatch[0].length)}`;
-  }
-  const fm: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fields)) fm[k] = v;
-  const fmStr = stringifyYaml(fm);
-  return `---\n${fmStr}---\n${content}`;
 }
 
 // ── SyncManager ───────────────────────────────────────────────────────────────
@@ -281,9 +256,7 @@ export class SyncManager {
         const hash = fnv1a(content);
         newHashes[repoPath] = hash;
 
-        // Skip only if hash matches AND the note already has the current pubobs-url format (with key)
-        const hasFreshUrl = /pubobs-url:.*\/#\/read\/.*&/.test(content);
-        if (hasFreshUrl && storedHashes[repoPath] === hash) {
+        if (storedHashes[repoPath] === hash) {
           skipped++;
           continue;
         }
@@ -291,16 +264,6 @@ export class SyncManager {
         notice.setMessage(`Rendering ${syncFiles.length + 1}: ${f.basename}…`);
         const used = detectPlugins(content);
         const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId, used);
-
-        // Write pubobs-url back to vault so it's visible and copyable from the note
-        const pubobsURL = (syncFile.frontmatter as Record<string, unknown> | undefined)?.['pubobs-url'] as string | undefined;
-        if (pubobsURL) {
-          const updated = injectFrontmatterFields(content, { 'pubobs-url': pubobsURL });
-          if (updated !== content) {
-            await this.app.vault.modify(f, updated);
-            newHashes[repoPath] = fnv1a(updated);
-          }
-        }
 
         syncFiles.push(syncFile);
         for (const [vaultPath, buf] of assets) assetMap.set(vaultPath, buf);
@@ -313,10 +276,10 @@ export class SyncManager {
     // Paths that were previously synced but no longer exist in the vault
     const deletedPaths = Object.keys(storedHashes).filter(p => !currentRepoPaths.has(p));
 
-    // Remove render keys for notes that no longer exist
-    if (this.settings.renderKeys[repoId]) {
+    // Remove cached note keys for notes that no longer exist
+    if (this.settings.noteKeys?.[repoId]) {
       for (const p of deletedPaths) {
-        delete this.settings.renderKeys[repoId][p];
+        delete this.settings.noteKeys[repoId][p];
       }
     }
 
@@ -339,6 +302,18 @@ export class SyncManager {
 
     console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged`);
     const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
+
+    // The backend is the sole authority on each note's key — always
+    // overwrite our local cache with whatever it just returned, even for
+    // notes we thought we already had a key for (e.g. an admin
+    // unshared/rotated the key via the web UI since our last sync).
+    if (result.note_keys) {
+      if (!this.settings.noteKeys) this.settings.noteKeys = {};
+      if (!this.settings.noteKeys[repoId]) this.settings.noteKeys[repoId] = {};
+      for (const [path, key] of Object.entries(result.note_keys)) {
+        this.settings.noteKeys[repoId][path] = key;
+      }
+    }
 
     // Persist hashes only after a successful sync
     for (const p of deletedPaths) delete newHashes[p];
@@ -420,45 +395,26 @@ export class SyncManager {
       delete frontmatter['pubobs-plugins'];
     }
 
-    let mdContent = injectPluginFrontmatter(content, pluginsMeta);
+    const mdContent = injectPluginFrontmatter(content, pluginsMeta);
 
-    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder, this.settings.renderKeys[repoId]);
+    const { html, assets } = await renderNoteToHTML(this.app, content, file.path, repoId, vaultFolder, subfolder, this.settings.noteKeys?.[repoId]);
 
-    // ── Stable per-note encryption key ──────────────────────────────────────────
-    if (!this.settings.renderKeys[repoId]) this.settings.renderKeys[repoId] = {};
-    let renderKeyB64 = this.settings.renderKeys[repoId][repoPath];
-    if (!renderKeyB64) {
-      // Fallback: check existing frontmatter in case settings was migrated or lost
-      const fmMatch = mdContent.match(/^---\n([\s\S]*?)\n---/);
-      if (fmMatch) {
-        try {
-          const fm = parseYaml(fmMatch[1]) as Record<string, unknown>;
-          // New format: key embedded in pubobs-url after last '&'
-          if (typeof fm['pubobs-url'] === 'string') {
-            const u = fm['pubobs-url'] as string;
-            const amp = u.lastIndexOf('&');
-            if (amp !== -1) renderKeyB64 = u.slice(amp + 1);
-          }
-          // Legacy: separate pubobs-render-key field
-          if (!renderKeyB64 && typeof fm['pubobs-render-key'] === 'string') {
-            renderKeyB64 = fm['pubobs-render-key'];
-          }
-        } catch { /* ignore */ }
-      }
+    // ── Backend-authoritative encryption key ────────────────────────────────────
+    // Prefer a cached key from an earlier sync's response. For a brand-new
+    // note (no cached key yet — first sync ever, or plugin data was
+    // cleared), fetch-or-mint one from the backend BEFORE we can encrypt
+    // this file's payload: the main sync request can't mint it for us here,
+    // since by the time the server would generate it, the client already
+    // needs to have sent the (necessarily already-encrypted) content.
+    if (!this.settings.noteKeys) this.settings.noteKeys = {};
+    if (!this.settings.noteKeys[repoId]) this.settings.noteKeys[repoId] = {};
+    let keyB64 = this.settings.noteKeys[repoId][repoPath];
+    if (!keyB64) {
+      keyB64 = await this.client.getNoteKey(repoId, repoPath);
+      this.settings.noteKeys[repoId][repoPath] = keyB64;
     }
-    if (!renderKeyB64) {
-      renderKeyB64 = base64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
-    }
-    this.settings.renderKeys[repoId][repoPath] = renderKeyB64;
 
-    const base = this.settings.backendUrl.replace(/\/$/, '');
-    const pubobsURL = `${base}/#/read/${repoId}/${repoPath}&${renderKeyB64}`;
-    mdContent = injectFrontmatterFields(mdContent, { 'pubobs-url': pubobsURL });
-
-    // Also reflect in the frontmatter payload so the backend stores it immediately
-    frontmatter['pubobs-url'] = pubobsURL;
-
-    const encryptedHTML = await encryptHTML(html, base64urlDecode(renderKeyB64));
+    const encryptedHTML = await encryptHTML(html, base64urlDecode(keyB64));
 
     return {
       syncFile: { path: repoPath, md_content: mdContent, encrypted_html: encryptedHTML, frontmatter },

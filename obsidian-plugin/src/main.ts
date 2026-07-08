@@ -52,6 +52,20 @@ export default class PubObsPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'copy-share-link',
+      name: 'Copy share link for this note',
+      // checkCallback lets Obsidian hide/disable this command from the
+      // palette entirely when the active file isn't a currently-synced note
+      // in a currently-configured repo, rather than showing it and failing.
+      checkCallback: (checking: boolean) => {
+        const target = this.resolveActiveNoteTarget();
+        if (!target) return false;
+        if (!checking) void this.copyShareLinkForNote(target.repoId, target.repoPath);
+        return true;
+      },
+    });
+
     this.settingTab = new PubObsSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
   }
@@ -62,6 +76,41 @@ export default class PubObsPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  // resolveActiveNoteTarget determines whether the active file maps to a
+  // currently-synced note in a currently-configured repo, mirroring the same
+  // vaultFolder/subfolder → repoPath transform SyncManager uses, and the same
+  // "vaultFolder must be set" precondition SyncManager.syncRepo enforces
+  // before it will sync a repo at all. Returns null when the active file
+  // isn't under any configured repo mapping, or hasn't been synced yet
+  // (no stored hash for it) — the /share endpoint needs the note to already
+  // exist server-side.
+  private resolveActiveNoteTarget(): { repoId: string; repoPath: string } | null {
+    const file = this.app.workspace.getActiveFile();
+    if (!file || file.extension !== 'md') return null;
+
+    for (const [repoId, mapping] of Object.entries(this.settings.repoMappings)) {
+      const { vaultFolder, subfolder } = mapping;
+      if (!vaultFolder || !file.path.startsWith(vaultFolder + '/')) continue;
+      const relative = file.path.slice(vaultFolder.length + 1);
+      const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
+      if (!this.settings.syncHashes[repoId]?.[repoPath]) continue;
+      return { repoId, repoPath };
+    }
+    return null;
+  }
+
+  private async copyShareLinkForNote(repoId: string, repoPath: string): Promise<void> {
+    try {
+      await this.client.shareNote(repoId, repoPath, 'restricted');
+      const base = this.settings.backendUrl.replace(/\/$/, '');
+      const url = `${base}/#/read/${repoId}/${repoPath}`;
+      await navigator.clipboard.writeText(url);
+      new Notice('PubObs: share link copied to clipboard');
+    } catch (e: unknown) {
+      new Notice(`PubObs: failed to copy share link — ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async refreshRepoList(): Promise<void> {

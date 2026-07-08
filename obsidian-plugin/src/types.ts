@@ -6,7 +6,13 @@ export interface PubObsSettings {
   repoMappings: Record<string, RepoMapping>; // repoId → mapping
   pullSHAs: Record<string, Record<string, string>>; // repoId → filePath → sha
   syncHashes: Record<string, Record<string, string>>; // repoId → repoPath → content hash
-  renderKeys: Record<string, Record<string, string>>; // repoId → repoPath → base64url-encoded AES-GCM key
+  // repoId → repoPath → base64url-encoded AES-GCM key. Purely a local
+  // performance cache of the backend-authoritative key (see
+  // GetOrCreateNoteKey/SetNoteShared server-side) — never the source of
+  // truth. Always overwritten with whatever the server most recently
+  // returned (sync response or a dedicated key fetch), never the reverse,
+  // so a server-side rotation (e.g. via unshare) is always picked up.
+  noteKeys: Record<string, Record<string, string>>;
 }
 
 export interface RepoMapping {
@@ -42,5 +48,5 @@ export const DEFAULT_SETTINGS: PubObsSettings = {
   repoMappings: {},
   pullSHAs: {},
   syncHashes: {},
-  renderKeys: {},
+  noteKeys: {},
 };

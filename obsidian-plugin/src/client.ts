@@ -116,7 +116,9 @@ export class BackendClient {
     return resp.json as TokenResponse;
   }
 
-  async sync(repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[]): Promise<{ commit_sha: string }> {
+  async sync(
+    repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[],
+  ): Promise<{ commit_sha: string; note_keys?: Record<string, string> }> {
     const body = await gzipCompress(JSON.stringify({ files, assets, deleted_paths: deletedPaths }));
     return this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/sync`,
@@ -129,5 +131,30 @@ export class BackendClient {
 
   async listFiles(repoId: string): Promise<FileEntry[]> {
     return this.request({ url: `${this.baseUrl}/api/repos/${repoId}/files` });
+  }
+
+  // getNoteKey mints (or fetches the already-minted) backend-authoritative
+  // key for a note WITHOUT touching its shared_publicly state — used to
+  // learn a brand-new note's key before it can be encrypted for the main
+  // sync request, a chicken-and-egg problem /share can't solve (its
+  // "restricted" mode never returns a key; its "public" mode would
+  // incorrectly make the note public just to learn one).
+  async getNoteKey(repoId: string, notePath: string): Promise<string> {
+    const resp = await this.request<{ key: string }>({
+      url: `${this.baseUrl}/api/repos/${repoId}/notes/${notePath}/key`,
+      method: 'POST',
+    });
+    return resp.key;
+  }
+
+  async shareNote(
+    repoId: string, notePath: string, mode: 'restricted' | 'public',
+  ): Promise<{ shared: boolean; path: string; key?: string }> {
+    return this.request({
+      url: `${this.baseUrl}/api/repos/${repoId}/notes/${notePath}/share`,
+      method: 'POST',
+      contentType: 'application/json',
+      body: JSON.stringify({ mode }),
+    });
   }
 }

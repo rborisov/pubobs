@@ -264,3 +264,99 @@ describe('SyncManager.syncRepo', () => {
     await expect(manager.syncRepo('missing-repo')).rejects.toThrow('No folder mapping');
   });
 });
+
+describe('SyncManager key handling', () => {
+  // Valid base64url-encoded 32-byte AES-256 keys — encryptHTML's
+  // crypto.subtle.importKey call rejects anything the wrong length, so
+  // these can't be arbitrary test strings like real code elsewhere uses.
+  const FETCHED_KEY = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
+  const CACHED_KEY = 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI';
+  const SERVER_ROTATED_KEY = 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM';
+  const STALE_LOCAL_KEY = 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ';
+
+  function makeMockFile(path: string) {
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    return { path, extension: 'md', basename: base.replace(/\.md$/, '') };
+  }
+
+  function makeMockApp(files: unknown[], content = '# Hello') {
+    return {
+      vault: {
+        getFiles: jest.fn().mockReturnValue(files),
+        getAbstractFileByPath: jest.fn().mockReturnValue(null),
+        create: jest.fn().mockResolvedValue(undefined),
+        modify: jest.fn().mockResolvedValue(undefined),
+        createFolder: jest.fn().mockResolvedValue(undefined),
+        read: jest.fn().mockResolvedValue(content),
+      },
+      metadataCache: {
+        getFileCache: jest.fn().mockReturnValue({ frontmatter: {} }),
+        getFirstLinkpathDest: jest.fn().mockReturnValue(null),
+      },
+    };
+  }
+
+  function makeMockClient(noteKeys: Record<string, string> = { 'notes/foo.md': FETCHED_KEY }) {
+    return {
+      listFiles: jest.fn().mockResolvedValue([]),
+      getNoteKey: jest.fn().mockResolvedValue(FETCHED_KEY),
+      sync: jest.fn().mockResolvedValue({ commit_sha: 'abc1234567890', note_keys: noteKeys }),
+    };
+  }
+
+  function makeSettings() {
+    return {
+      repoMappings: { 'repo-1': { repoName: 'Test', vaultFolder: 'Published', subfolder: '' } },
+      pullSHAs: {},
+      syncHashes: {},
+      noteKeys: {} as Record<string, Record<string, string>>,
+    };
+  }
+
+  test('fetches a key from the backend for a brand-new note before encrypting', async () => {
+    const app = makeMockApp([makeMockFile('Published/notes/foo.md')]);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    await manager.syncRepo('repo-1');
+
+    expect(client.getNoteKey).toHaveBeenCalledWith('repo-1', 'notes/foo.md');
+    expect(settings.noteKeys['repo-1']['notes/foo.md']).toBe(FETCHED_KEY);
+  });
+
+  test('reuses a cached key without calling getNoteKey again', async () => {
+    const app = makeMockApp([makeMockFile('Published/notes/foo.md')]);
+    const client = makeMockClient({ 'notes/foo.md': CACHED_KEY });
+    const settings = makeSettings();
+    settings.noteKeys = { 'repo-1': { 'notes/foo.md': CACHED_KEY } };
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    await manager.syncRepo('repo-1');
+
+    expect(client.getNoteKey).not.toHaveBeenCalled();
+  });
+
+  test('overwrites the local key cache with whatever the sync response returns, even if a local guess existed', async () => {
+    const app = makeMockApp([makeMockFile('Published/notes/foo.md')]);
+    const client = makeMockClient({ 'notes/foo.md': SERVER_ROTATED_KEY });
+    const settings = makeSettings();
+    settings.noteKeys = { 'repo-1': { 'notes/foo.md': STALE_LOCAL_KEY } };
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    await manager.syncRepo('repo-1');
+
+    expect(settings.noteKeys['repo-1']['notes/foo.md']).toBe(SERVER_ROTATED_KEY);
+  });
+
+  test('never writes a key or pubobs-url back into the vault file', async () => {
+    const app = makeMockApp([makeMockFile('Published/notes/foo.md')]);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.modify).not.toHaveBeenCalled();
+  });
+});
