@@ -291,6 +291,47 @@ func TestPubListNotes_anonymousGuestSeesEmptyRole(t *testing.T) {
 // only ever inlined html_content for legacy (never-encrypted) notes, so any
 // note synced under the render-encryption scheme was unreadable by anyone
 // who didn't separately hold a share-link key — even a real repo member.
+// TestPubGetNote_authenticatedStaleShareKeyStillReturnsHTML verifies repo
+// members opening an outdated ?key= share URL still receive server-decrypted
+// html_content. The frontend must prefer that over client-side /render decrypt
+// when the caller has a real repo role — otherwise a post-unshare stale key
+// in the bookmarked URL breaks the page even for authenticated readers.
+func TestPubGetNote_authenticatedStaleShareKeyStillReturnsHTML(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "u1", "sha1"))
+
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	keyBytes, err := base64.RawURLEncoding.DecodeString(key)
+	require.NoError(t, err)
+
+	plaintext := []byte("<h1>Real content</h1>")
+	ciphertext := testGCMEncrypt(t, keyBytes, plaintext)
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", "docs/intro.md", ciphertext))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md?key=totally-stale-share-key", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, string(plaintext), resp["html_content"],
+		"repo access must win over a stale ?key= in the URL")
+	require.Equal(t, "reader", resp["role"])
+}
+
 func TestPubGetNote_authenticatedRealAccess_decryptsRenderWithoutKey(t *testing.T) {
 	deps, _ := newTestDepsForPub(t)
 	ctx := context.Background()

@@ -112,14 +112,22 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const content = document.createElement('div');
   content.className = 'markdown-rendered markdown-preview-view';
 
+  // Share-link-only visitors (empty/guest role) must decrypt client-side via
+  // /render + ?key=. Repo members who open an old share URL while logged in
+  // must NOT take this path — after unshare the URL's key is stale but the
+  // server still decrypts for real repo access and returns html_content.
+  const shareLinkOnly = !note.role || note.role === '';
   let htmlContent: string;
-  if (effectiveKey) {
+  if (effectiveKey && shareLinkOnly) {
     try {
       const renderURL = `/pub/${repoId}/render/${notePath.split('/').map(encodeURIComponent).join('/')}?key=${encodeURIComponent(effectiveKey)}`;
       htmlContent = await decryptRenderBlob(renderURL, effectiveKey);
     } catch (e) {
       console.error('[PubObs] decryption failed:', e);
-      htmlContent = '<p style="color:#888;font-style:italic">Could not decrypt note content.</p>';
+      const msg = e instanceof Error && e.message.includes('404')
+        ? 'Note content is not yet available. Ask the note owner to re-sync from Obsidian.'
+        : 'Could not decrypt note content.';
+      htmlContent = `<p style="color:#888;font-style:italic">${msg}</p>`;
     }
   } else if (note.html_content) {
     htmlContent = note.html_content;
