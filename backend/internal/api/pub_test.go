@@ -628,10 +628,101 @@ func TestPubGetNote_healsPrunedNoteFromGit(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.Equal(t, "Healed", resp["title"])
+	html, _ := resp["html_content"].(string)
+	require.Contains(t, html, "Healed", "pruned note must render from git markdown without re-sync")
 
 	got, err := deps.Store.GetNote(ctx, "r1", "healed.md")
 	require.NoError(t, err)
 	require.NotNil(t, got, "open must recreate the pruned DB row from git")
+}
+
+// TestPubGetNote_sharedPrunedBlobRendersFromGit reproduces the reported
+// production failure: a note was shared (render blob existed), then
+// healStaleRenderBlob deleted the blob during share/unshare, leaving repo
+// members with no html_content. Signed-in users must still read the note from
+// git markdown without an Obsidian re-sync.
+func TestPubGetNote_sharedPrunedBlobRendersFromGit(t *testing.T) {
+	bareURL := newBareRepo(t)
+	notePath := "3gpp/38211-konspekt.md"
+	seedBareRepoWithFiles(t, bareURL, map[string]string{
+		notePath: "# 3GPP TS 38.211\n\nPhysical channels.",
+	})
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", notePath)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "admin1", "sha1"))
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+
+	// Simulate share heal deleting the only render blob.
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Delete("r1", notePath))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/"+notePath, nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Equal(t, "admin", resp["role"])
+	html, _ := resp["html_content"].(string)
+	require.Contains(t, html, "3GPP TS 38.211", "signed-in user must read note from git when render blob is gone")
+	require.NotContains(t, resp, "render_pending")
+}
+
+// TestPubGetNote_sharedPrunedRowAndBlobRendersFromGit simulates the old
+// reconcile bug that deleted both the DB row and render blob for a previously
+// shared note. A signed-in repo member opening the bare URL must get 200 with
+// content rendered from git, not 404.
+func TestPubGetNote_sharedPrunedRowAndBlobRendersFromGit(t *testing.T) {
+	bareURL := newBareRepo(t)
+	notePath := "3gpp/38213-konspekt.md"
+	seedBareRepoWithFiles(t, bareURL, map[string]string{
+		notePath: "# 3GPP TS 38.213\n\nControl procedures.",
+	})
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false))
+
+	note, err := deps.Store.UpsertNote(ctx, "r1", notePath)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "", "{}", "admin1", "sha1"))
+	key, err := deps.Store.GetOrCreateNoteKey(ctx, note.ID)
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, "r1")
+	require.NoError(t, err)
+	require.NoError(t, rstore.Write("r1", notePath, []byte("was-here")))
+	require.NoError(t, deps.Store.DeleteNote(ctx, "r1", notePath))
+	require.NoError(t, rstore.Delete("r1", notePath))
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/"+notePath, nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	html, _ := resp["html_content"].(string)
+	require.Contains(t, html, "3GPP TS 38.213")
+	got, err := deps.Store.GetNote(ctx, "r1", notePath)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }
 
 func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {

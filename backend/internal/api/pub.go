@@ -249,7 +249,7 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 
 		hasRepoAccess := pubRepoAccess(r, deps, repoID) != nil
-		render := resolveNoteHTML(r.Context(), deps, repoID, notePath, note, snap, hasRepoAccess)
+		render := resolveNoteHTML(r.Context(), deps, repo, notePath, note, snap, hasRepoAccess)
 
 		resp := map[string]any{
 			"id":              note.ID,
@@ -307,9 +307,10 @@ func syncedByFromRequest(r *http.Request, deps *Deps) string {
 // /render + client-side ?key= decryption. Repo members (hasRepoAccess) always
 // get server-side decrypt when a matching blob exists; when the blob is
 // missing or stale (key mismatch after share/unshare), we heal it away and
-// fall back to legacy snapshot HTML, or signal render_pending when nothing
-// is available until the next Obsidian sync.
-func resolveNoteHTML(ctx context.Context, deps *Deps, repoID, notePath string, note *model.Note, snap *model.NoteSnapshot, hasRepoAccess bool) noteHTMLResult {
+// fall back to legacy snapshot HTML, then git markdown rendered server-side,
+// or signal render_pending only when the source file is not in git.
+func resolveNoteHTML(ctx context.Context, deps *Deps, repo *model.Repo, notePath string, note *model.Note, snap *model.NoteSnapshot, hasRepoAccess bool) noteHTMLResult {
+	repoID := repo.ID
 	rstore, rerr := deps.Resolver.RenderStoreFor(ctx, repoID)
 	if rerr == nil {
 		if data, _ := rstore.Read(repoID, notePath); data != nil {
@@ -346,6 +347,9 @@ func resolveNoteHTML(ctx context.Context, deps *Deps, repoID, notePath string, n
 		return noteHTMLResult{HTMLContent: htmlContent}
 	}
 	if hasRepoAccess {
+		if md, err := readNoteMarkdownFromGit(ctx, deps, repo, notePath); err == nil && md != "" {
+			return noteHTMLResult{HTMLContent: renderMarkdown(md)}
+		}
 		return noteHTMLResult{Pending: true}
 	}
 	return noteHTMLResult{}

@@ -70,21 +70,21 @@ func pruneOrphanNote(ctx context.Context, deps *Deps, repoID, path string) {
 	}
 }
 
-// ensureNoteFromGit recreates a missing notes row (and snapshot metadata) from
-// git when the path is still tracked. This heals rows that were incorrectly
-// pruned by an older reconcile pass before shared/encrypted-note guards
-// existed, so the next open attempt succeeds instead of returning 404 forever.
-func ensureNoteFromGit(ctx context.Context, deps *Deps, repo *model.Repo, notePath, syncedBy string) (*model.Note, error) {
-	if deps.Cache == nil || syncedBy == "" {
-		return nil, nil
+// readNoteMarkdownFromGit returns raw markdown for notePath when it is still
+// tracked in the repo's git cache. Used to heal pruned DB rows and to serve
+// readable content when the encrypted render blob was deleted but the source
+// file remains in git.
+func readNoteMarkdownFromGit(ctx context.Context, deps *Deps, repo *model.Repo, notePath string) (string, error) {
+	if deps.Cache == nil {
+		return "", nil
 	}
 	credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	paths, err := deps.Cache.ListFilePaths(ctx, repo, credJSON)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	found := false
 	for _, p := range paths {
@@ -94,11 +94,25 @@ func ensureNoteFromGit(ctx context.Context, deps *Deps, repo *model.Repo, notePa
 		}
 	}
 	if !found {
+		return "", nil
+	}
+	return deps.Cache.ReadRawFile(repo.ID, notePath)
+}
+
+// ensureNoteFromGit recreates a missing notes row (and snapshot metadata) from
+// git when the path is still tracked. This heals rows that were incorrectly
+// pruned by an older reconcile pass before shared/encrypted-note guards
+// existed, so the next open attempt succeeds instead of returning 404 forever.
+func ensureNoteFromGit(ctx context.Context, deps *Deps, repo *model.Repo, notePath, syncedBy string) (*model.Note, error) {
+	if deps.Cache == nil || syncedBy == "" {
 		return nil, nil
 	}
-	content, err := deps.Cache.ReadRawFile(repo.ID, notePath)
+	content, err := readNoteMarkdownFromGit(ctx, deps, repo, notePath)
 	if err != nil {
 		return nil, err
+	}
+	if content == "" {
+		return nil, nil
 	}
 	note, err := deps.Store.UpsertNote(ctx, repo.ID, notePath)
 	if err != nil || note == nil {
