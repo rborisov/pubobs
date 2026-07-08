@@ -240,6 +240,7 @@ export class SyncManager {
     const syncFiles: SyncFile[] = [];
     const assetMap = new Map<string, ArrayBuffer>();
     let skipped = 0;
+    const failedFiles: Array<{ path: string; reason: string }> = [];
 
     for (let i = 0; i < vaultFiles.length; i++) {
       const f = vaultFiles[i];
@@ -262,13 +263,28 @@ export class SyncManager {
         }
 
         notice.setMessage(`Rendering ${syncFiles.length + 1}: ${f.basename}…`);
+
+        // A file that was created/modified/renamed moments ago may not have
+        // been indexed by Obsidian's metadata cache yet. Rendering it too
+        // early can trip up community plugins (e.g. Dataview) that assume
+        // the cache already exists for the file they're processing, surfacing
+        // as an unrelated-looking "no Obsidian file metadata" crash. Give
+        // Obsidian a bounded window to finish indexing before we touch it.
+        const metadataReady = await this.waitForMetadataReady(f);
+        if (!metadataReady) {
+          console.warn(`[PubObs] metadata cache still not ready for "${f.path}" after waiting — proceeding anyway`);
+        }
+
         const used = detectPlugins(content);
         const { syncFile, assets } = await this.buildSyncFile(f, content, vaultFolder, subfolder, repoId, used);
 
         syncFiles.push(syncFile);
         for (const [vaultPath, buf] of assets) assetMap.set(vaultPath, buf);
       } catch (e) {
-        console.error(`[PubObs] render failed for ${f.path}: ${e}`);
+        const reason = e instanceof Error ? e.message : String(e);
+        failedFiles.push({ path: f.path, reason });
+        console.error(`[PubObs] failed to sync "${f.path}": ${reason}`, e);
+        new Notice(`PubObs: skipped "${f.basename}" — ${reason}`, 10000);
       }
     }
     notice.hide();
@@ -295,12 +311,20 @@ export class SyncManager {
       content: bufferToBase64(new TextEncoder().encode(css).buffer),
     });
 
+    const failedSuffix = failedFiles.length > 0
+      ? `, ${failedFiles.length} skipped due to errors (see console)`
+      : '';
+
     if (syncFiles.length === 0 && deletedPaths.length === 0) {
-      new Notice(`PubObs: nothing changed (${skipped} note(s) up to date)`);
+      if (failedFiles.length > 0) {
+        new Notice(`PubObs: nothing changed (${skipped} note(s) up to date${failedSuffix})`);
+      } else {
+        new Notice(`PubObs: nothing changed (${skipped} note(s) up to date)`);
+      }
       return;
     }
 
-    console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged`);
+    console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged, ${failedFiles.length} failed`);
     const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
 
     // The backend is the sole authority on each note's key — always
@@ -320,7 +344,7 @@ export class SyncManager {
     this.settings.syncHashes[repoId] = newHashes;
     await this.saveSettings();
 
-    new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged — ${result.commit_sha.slice(0, 7)}`);
+    new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
   }
 
   private async createLocalCopy(
@@ -363,6 +387,34 @@ export class SyncManager {
     } else {
       await this.app.vault.create(copyPath, copyContent);
     }
+  }
+
+  /**
+   * Waits for Obsidian to finish indexing `file`'s metadata cache, up to
+   * `timeoutMs`. Resolves `true` as soon as `getFileCache` returns a value,
+   * or `false` if the timeout elapses first — callers should treat `false`
+   * as "proceed anyway, best-effort" rather than a hard failure, since most
+   * of what we read from the cache (frontmatter) is optional.
+   */
+  private waitForMetadataReady(file: TFile, timeoutMs = 4000): Promise<boolean> {
+    if (this.app.metadataCache.getFileCache(file)) return Promise.resolve(true);
+
+    return new Promise<boolean>(resolve => {
+      let settled = false;
+      const finish = (ready: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.app.metadataCache.offref(ref);
+        resolve(ready);
+      };
+      const ref = this.app.metadataCache.on('resolve', resolvedFile => {
+        if (resolvedFile.path === file.path && this.app.metadataCache.getFileCache(file)) {
+          finish(true);
+        }
+      });
+      const timer = setTimeout(() => finish(!!this.app.metadataCache.getFileCache(file)), timeoutMs);
+    });
   }
 
   private async buildSyncFile(

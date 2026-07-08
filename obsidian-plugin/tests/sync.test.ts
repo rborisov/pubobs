@@ -8,7 +8,15 @@ jest.mock('../src/renderer', () => ({
 jest.mock('obsidian', () => ({
   App: class {},
   TFile: class {},
-  Notice: class { constructor() {} setMessage() {} hide() {} },
+  __notices: [] as string[],
+  Notice: class {
+    constructor(message?: string) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      (require('obsidian').__notices as string[]).push(message ?? '');
+    }
+    setMessage() {}
+    hide() {}
+  },
   Modal: class {
     constructor(public app: unknown) {}
     open() {}
@@ -79,6 +87,7 @@ jest.mock('obsidian', () => ({
 }));
 
 import { repoPathToVaultPath, SyncManager, semverGte, injectPluginFrontmatter, parseFrontmatterPlugins } from '../src/sync';
+import { renderNoteToHTML } from '../src/renderer';
 
 describe('repoPathToVaultPath', () => {
   test('no vaultFolder, no subfolder — returns path unchanged', () => {
@@ -358,5 +367,129 @@ describe('SyncManager key handling', () => {
     await manager.syncRepo('repo-1');
 
     expect(app.vault.modify).not.toHaveBeenCalled();
+  });
+});
+
+describe('SyncManager metadata readiness and per-file isolation', () => {
+  const KEY = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
+
+  function makeMockFile(path: string) {
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    return { path, extension: 'md', basename: base.replace(/\.md$/, '') };
+  }
+
+  // Mimics Obsidian's MetadataCache: getFileCache returns null for a file
+  // that hasn't been indexed yet, and an 'resolve' event fires once it has —
+  // exactly the readiness signal SyncManager waits on for very recently
+  // created/modified files.
+  function makeMetadataCache(readyPaths: Set<string> = new Set()) {
+    const listeners: Array<(file: { path: string }) => void> = [];
+    return {
+      getFileCache: jest.fn((file: { path: string }) => (readyPaths.has(file.path) ? { frontmatter: {} } : null)),
+      getFirstLinkpathDest: jest.fn().mockReturnValue(null),
+      on: jest.fn((_event: string, cb: (file: { path: string }) => void) => {
+        listeners.push(cb);
+        return {};
+      }),
+      offref: jest.fn(),
+      __emitResolve(file: { path: string }) {
+        readyPaths.add(file.path);
+        for (const cb of listeners) cb(file);
+      },
+    };
+  }
+
+  function makeMockApp(files: unknown[], metadataCache: ReturnType<typeof makeMetadataCache>) {
+    return {
+      vault: {
+        getFiles: jest.fn().mockReturnValue(files),
+        getAbstractFileByPath: jest.fn().mockReturnValue(null),
+        create: jest.fn().mockResolvedValue(undefined),
+        modify: jest.fn().mockResolvedValue(undefined),
+        createFolder: jest.fn().mockResolvedValue(undefined),
+        read: jest.fn().mockResolvedValue('# Hello'),
+      },
+      metadataCache,
+    };
+  }
+
+  function makeMockClient() {
+    return {
+      listFiles: jest.fn().mockResolvedValue([]),
+      getNoteKey: jest.fn().mockResolvedValue(KEY),
+      sync: jest.fn().mockResolvedValue({ commit_sha: 'abc1234567890', note_keys: {} }),
+    };
+  }
+
+  function makeSettings() {
+    return {
+      repoMappings: { 'repo-1': { repoName: 'Test', vaultFolder: 'Published', subfolder: '' } },
+      pullSHAs: {},
+      syncHashes: {},
+      noteKeys: {} as Record<string, Record<string, string>>,
+    };
+  }
+
+  function getNotices(): string[] {
+    return (jest.requireMock('obsidian') as { __notices: string[] }).__notices;
+  }
+
+  beforeEach(() => {
+    (renderNoteToHTML as jest.Mock).mockReset();
+    (renderNoteToHTML as jest.Mock).mockResolvedValue({ html: '<p>mock</p>', assets: new Map() });
+    getNotices().length = 0;
+  });
+
+  test('a brand-new file with no metadata cache yet is retried and synced once Obsidian finishes indexing it', async () => {
+    const file = makeMockFile('Published/notes/new.md');
+    const metadataCache = makeMetadataCache(); // starts empty — file not yet indexed
+    const app = makeMockApp([file], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    const syncPromise = manager.syncRepo('repo-1');
+
+    // Flush microtasks until SyncManager has registered its 'resolve' listener
+    // (i.e. it observed the missing cache and started waiting), then simulate
+    // Obsidian finishing indexing the file.
+    for (let i = 0; i < 50 && metadataCache.on.mock.calls.length === 0; i++) {
+      await Promise.resolve();
+    }
+    expect(metadataCache.on.mock.calls.length).toBeGreaterThan(0);
+    metadataCache.__emitResolve(file);
+
+    await syncPromise;
+
+    expect(client.sync).toHaveBeenCalled();
+    const syncFiles = (client.sync as jest.Mock).mock.calls[0][1];
+    expect(syncFiles).toHaveLength(1);
+    expect(syncFiles[0].path).toBe('notes/new.md');
+    expect(getNotices().some(n => n.includes('skipped'))).toBe(false);
+  });
+
+  test('one file failing to render is skipped with a Notice while the rest of the sync still completes', async () => {
+    const goodFile = makeMockFile('Published/notes/good.md');
+    const badFile = makeMockFile('Published/notes/bad.md');
+    const metadataCache = makeMetadataCache(new Set([goodFile.path, badFile.path]));
+    const app = makeMockApp([goodFile, badFile], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+
+    (renderNoteToHTML as jest.Mock).mockImplementation((_app: unknown, _content: string, sourcePath: string) => {
+      if (sourcePath === badFile.path) return Promise.reject(new Error('boom'));
+      return Promise.resolve({ html: '<p>ok</p>', assets: new Map() });
+    });
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+
+    await expect(manager.syncRepo('repo-1')).resolves.toBeUndefined();
+
+    expect(client.sync).toHaveBeenCalled();
+    const syncFiles = (client.sync as jest.Mock).mock.calls[0][1];
+    expect(syncFiles).toHaveLength(1);
+    expect(syncFiles[0].path).toBe('notes/good.md');
+
+    expect(getNotices().some(n => n.includes('bad') && n.includes('skipped') && n.includes('boom'))).toBe(true);
   });
 });
