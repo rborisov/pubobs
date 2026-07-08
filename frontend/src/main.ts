@@ -25,9 +25,7 @@ register('/groups', () => groupsView(currentUser!));
 register('/read/:repoId', ({ repoId }) => readerListView(repoId, currentUser));
 register('/read/:repoId/*', params => readerNoteView(params['repoId'], params['*'] ?? ''));
 register('/', () => {
-  navigate(isAuthenticated()
-    ? (currentUser?.is_instance_admin || currentUser?.is_admin ? '/repos' : '/dashboard')
-    : '/login');
+  navigate(isAuthenticated() ? '/dashboard' : '/login');
   return document.createElement('div');
 });
 
@@ -68,7 +66,7 @@ async function boot(): Promise<void> {
     renderNav(app, currentUser);
 
     if (!location.hash || location.hash === '#' || location.hash === '#/') {
-      navigate(currentUser.is_instance_admin || currentUser.is_admin ? '/repos' : '/dashboard');
+      navigate('/dashboard');
     }
   }
 
@@ -102,7 +100,7 @@ function renderNav(app: HTMLElement, me: Me): void {
 
   const linkStyle = 'color:#a8bbd0;text-decoration:none;font-size:0.875rem;transition:color 0.1s';
   const logoHtml = `
-    <a href="${me.is_instance_admin || me.is_admin ? '#/repos' : '#/dashboard'}"
+    <a href="#/dashboard"
        style="display:flex;align-items:center;gap:8px;text-decoration:none;color:#fff">
       ${LOGO_MARK}
       <span style="font-weight:700;font-size:1rem;letter-spacing:-0.01em">
