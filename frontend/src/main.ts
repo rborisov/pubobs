@@ -50,23 +50,33 @@ async function boot(): Promise<void> {
     return;
   }
 
-  if (isAuthenticated() && !isReaderRoute) {
+  // Reader routes (#/read/...) are reachable by anonymous guests, so they used
+  // to skip this whole block — but that also meant an AUTHENTICATED user (e.g.
+  // an admin who bookmarked, refreshed, or opened a reader link in a new tab)
+  // never got their identity resolved or their nav rendered on a direct load,
+  // leaving them stranded on the reader page with no way back to the admin
+  // panel. Resolve identity (and render the nav) whenever a token is present,
+  // reader route or not; only truly anonymous visitors skip it.
+  if (isAuthenticated()) {
     try {
       currentUser = await getMe();
+      renderNav(app, currentUser);
+
+      if (!isReaderRoute && (!location.hash || location.hash === '#' || location.hash === '#/')) {
+        navigate('/dashboard');
+      }
     } catch {
       tokenStore.clear();
-      navigate('/login');
-      const content = document.createElement('div');
-      content.id = 'content';
-      app.appendChild(content);
-      start(content);
-      return;
-    }
-
-    renderNav(app, currentUser);
-
-    if (!location.hash || location.hash === '#' || location.hash === '#/') {
-      navigate('/dashboard');
+      if (!isReaderRoute) {
+        navigate('/login');
+        const content = document.createElement('div');
+        content.id = 'content';
+        app.appendChild(content);
+        start(content);
+        return;
+      }
+      // On a reader route, a stale/invalid token shouldn't block the page —
+      // fall through and render it exactly as an anonymous guest would see it.
     }
   }
 
