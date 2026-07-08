@@ -116,6 +116,18 @@ save_version() {
   fi
 }
 
+ensure_update_env() {
+  [ -f "$ENV_FILE" ] || return
+  local tmp filtered=""
+  filtered=$(grep -v '^PUBOBS_UPDATE_REPO_URL=' "$ENV_FILE" | grep -v '^PUBOBS_UPDATE_BRANCH=' || true)
+  {
+    printf '%s\n' "$filtered"
+    echo "PUBOBS_UPDATE_REPO_URL=$REPO_URL"
+    echo "PUBOBS_UPDATE_BRANCH=main"
+  } > "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+}
+
 cleanup_repo() {
   info "Cleaning up source files..."
   save_version
@@ -213,6 +225,8 @@ PUBOBS_SECRET_KEY=$SECRET_KEY
 PUBOBS_ADMIN_EMAIL=$ADMIN_EMAIL
 PUBOBS_YANDEX_CLIENT_ID=$YANDEX_CLIENT_ID
 PUBOBS_YANDEX_CLIENT_SECRET=$YANDEX_CLIENT_SECRET
+PUBOBS_UPDATE_REPO_URL=$REPO_URL
+PUBOBS_UPDATE_BRANCH=main
 EOF
   chmod 600 "$ENV_FILE"
   success "Wrote $ENV_FILE"
@@ -431,6 +445,7 @@ do_update() {
   trap - EXIT
   rm -rf "$tmp_dir"
 
+  ensure_update_env
   build_app
   restart_containers
   cleanup_docker

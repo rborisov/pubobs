@@ -77,3 +77,32 @@ func TestLoad_customGitLocalOpTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 30*time.Second, cfg.GitLocalOpTimeout)
 }
+
+func TestLoad_updateDefaults(t *testing.T) {
+	withRequiredEnv(t)
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, config.DefaultUpdateRepoURL, cfg.UpdateRepoURL)
+	require.Equal(t, config.DefaultUpdateBranch, cfg.UpdateBranch)
+	require.Equal(t, "/opt/pubobs", cfg.UpdateInstallDir)
+}
+
+func TestLoad_normalizesGogsDevelopSettings(t *testing.T) {
+	withRequiredEnv(t)
+	t.Setenv("PUBOBS_UPDATE_REPO_URL", "https://gogs.example.com/team/pubobs.git")
+	t.Setenv("PUBOBS_UPDATE_BRANCH", "develop")
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, config.DefaultUpdateRepoURL, cfg.UpdateRepoURL)
+	require.Equal(t, config.DefaultUpdateBranch, cfg.UpdateBranch)
+}
+
+func TestNormalizeUpdateSettings(t *testing.T) {
+	repo, branch := config.NormalizeUpdateSettings("https://github.com/acme/pubobs.git", "develop")
+	require.Equal(t, config.DefaultUpdateRepoURL, repo)
+	require.Equal(t, config.DefaultUpdateBranch, branch)
+
+	repo, branch = config.NormalizeUpdateSettings("https://github.com/acme/pubobs.git", "main")
+	require.Equal(t, "https://github.com/acme/pubobs.git", repo)
+	require.Equal(t, "main", branch)
+}

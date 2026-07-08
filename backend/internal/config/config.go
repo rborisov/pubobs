@@ -6,7 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+)
+
+const (
+	DefaultUpdateRepoURL = "https://github.com/rborisov/pubobs.git"
+	DefaultUpdateBranch  = "main"
 )
 
 type Config struct {
@@ -79,9 +85,10 @@ func Load() (*Config, error) {
 	cfg.S3SecretKey = getEnv("PUBOBS_S3_SECRET_KEY", "")
 	cfg.S3Region = getEnv("PUBOBS_S3_REGION", "")
 	cfg.S3UseSSL = getEnv("PUBOBS_S3_USE_SSL", "true") != "false"
-	cfg.UpdateRepoURL = getEnv("PUBOBS_UPDATE_REPO_URL", "https://github.com/rborisov/pubobs.git")
-	cfg.UpdateBranch = getEnv("PUBOBS_UPDATE_BRANCH", "main")
+	cfg.UpdateRepoURL = getEnv("PUBOBS_UPDATE_REPO_URL", DefaultUpdateRepoURL)
+	cfg.UpdateBranch = getEnv("PUBOBS_UPDATE_BRANCH", DefaultUpdateBranch)
 	cfg.UpdateInstallDir = getEnv("PUBOBS_UPDATE_INSTALL_DIR", "/opt/pubobs")
+	cfg.UpdateRepoURL, cfg.UpdateBranch = NormalizeUpdateSettings(cfg.UpdateRepoURL, cfg.UpdateBranch)
 
 	if raw := os.Getenv("PUBOBS_SECRET_KEY"); raw != "" {
 		key, err := hex.DecodeString(raw)
@@ -128,6 +135,19 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// NormalizeUpdateSettings rewrites Gogs-era update settings that still point
+// at a self-hosted develop branch. install.sh and the in-app updater both
+// track GitHub main; leaving develop configured makes Check() report an
+// ancient SHA as "available".
+func NormalizeUpdateSettings(repoURL, branch string) (string, string) {
+	repo := strings.TrimSpace(repoURL)
+	br := strings.TrimSpace(branch)
+	if br == "develop" || strings.Contains(strings.ToLower(repo), "gogs") {
+		return DefaultUpdateRepoURL, DefaultUpdateBranch
+	}
+	return repo, br
 }
 
 func getEnv(key, def string) string {

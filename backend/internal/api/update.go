@@ -26,6 +26,48 @@ import (
 // compared against the latest commit SHA on the configured update branch.
 var Version = "dev"
 
+const deployedVersionFile = ".pubobs-version"
+
+// ReadDeployedVersion returns the commit SHA written by install.sh or the
+// in-app updater to UpdateInstallDir/.pubobs-version. That marker names the
+// commit whose deployment files were last applied and is the same source of
+// truth install.sh --update uses. When the marker is missing, fall back to
+// the embedded build Version (the commit the binary was compiled from).
+func ReadDeployedVersion(installDir string) string {
+	data, err := os.ReadFile(filepath.Join(installDir, deployedVersionFile))
+	if err != nil {
+		return Version
+	}
+	v := strings.TrimSpace(string(data))
+	if v == "" {
+		return Version
+	}
+	return v
+}
+
+// VersionsEqual reports whether two git commit identifiers refer to the
+// same revision. Full 40-char SHAs are compared exactly; otherwise a shared
+// prefix of at least 7 hex chars is treated as a match so abbreviated UI
+// labels still compare equal to ls-remote's full SHA.
+func VersionsEqual(a, b string) bool {
+	a = strings.TrimSpace(strings.ToLower(a))
+	b = strings.TrimSpace(strings.ToLower(b))
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+	min := len(a)
+	if len(b) < min {
+		min = len(b)
+	}
+	if min < 7 {
+		return false
+	}
+	return a[:min] == b[:min]
+}
+
 // updateExecFunc runs an external command with a fixed argument list (never
 // shell-interpolated) and returns its combined stdout+stderr, mirroring
 // exec.Command(name, args...).CombinedOutput(). It exists as a named type so
@@ -97,15 +139,16 @@ type UpdateManager struct {
 	log   strings.Builder
 }
 
-// NewUpdateManager constructs an UpdateManager seeded with the running
-// binary's Version as the "current" version.
+// NewUpdateManager constructs an UpdateManager seeded with the deployed
+// version marker when present (see ReadDeployedVersion).
 func NewUpdateManager(cfg *config.Config) *UpdateManager {
+	current := ReadDeployedVersion(cfg.UpdateInstallDir)
 	return &UpdateManager{
 		cfg: cfg,
 		state: updateState{
 			Status:       "idle",
-			Current:      Version,
-			CurrentShort: shortVersion(Version),
+			Current:      current,
+			CurrentShort: shortVersion(current),
 			UpdatedAt:    time.Now().UTC(),
 		},
 	}
@@ -145,13 +188,14 @@ func (m *UpdateManager) MaintenanceActive(path string) bool {
 // while a run is already "running" (Start owns that transition).
 func (m *UpdateManager) Check() updateState {
 	latest, err := LatestRemoteVersionFunc(m.cfg.UpdateRepoURL, m.cfg.UpdateBranch)
+	current := ReadDeployedVersion(m.cfg.UpdateInstallDir)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.state.Current = Version
-	m.state.CurrentShort = shortVersion(Version)
+	m.state.Current = current
+	m.state.CurrentShort = shortVersion(current)
 	m.state.Latest = latest
 	m.state.LatestShort = shortVersion(latest)
-	m.state.UpdateAvailable = latest != "" && Version != latest
+	m.state.UpdateAvailable = latest != "" && !VersionsEqual(current, latest)
 	m.state.UpdatedAt = time.Now().UTC()
 	if err != nil {
 		m.state.Status = "error"
@@ -193,7 +237,8 @@ func (m *UpdateManager) run() {
 		m.fail("Check latest version", err)
 		return
 	}
-	if latest == Version {
+	deployed := ReadDeployedVersion(m.cfg.UpdateInstallDir)
+	if VersionsEqual(latest, deployed) {
 		m.finish("Already up to date")
 		return
 	}

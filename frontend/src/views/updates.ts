@@ -163,6 +163,7 @@ function statusMessage(status: UpdateStatus | null): string {
   if (!status) return '';
   if (status.message) return status.message;
   if (status.update_available) return 'A newer server version is available.';
+  if (status.status === 'idle') return 'Up to date.';
   return 'No update is currently required.';
 }
 

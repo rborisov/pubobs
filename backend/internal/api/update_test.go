@@ -64,10 +64,26 @@ func TestUpdateManager_Check_versionComparison(t *testing.T) {
 func TestUpdateManager_Check_noUpdateWhenSameVersion(t *testing.T) {
 	stubLatestVersion(t, func(string, string) (string, error) { return api.Version, nil })
 	deps := newTestDepsWithUpdate(t, nil)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(deps.Config.UpdateInstallDir, ".pubobs-version"),
+		[]byte(api.Version+"\n"), 0644))
 
 	st := deps.Update.Check()
 	require.False(t, st.UpdateAvailable)
 	require.Equal(t, "idle", st.Status)
+}
+
+func TestUpdateManager_Check_usesDeployedMarkerNotEmbeddedBuild(t *testing.T) {
+	const deployed = "f1ff9525fce17f6b65d16f7671871c5912679ce8"
+	stubLatestVersion(t, func(string, string) (string, error) { return deployed, nil })
+	deps := newTestDepsWithUpdate(t, nil)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(deps.Config.UpdateInstallDir, ".pubobs-version"),
+		[]byte(deployed+"\n"), 0644))
+
+	st := deps.Update.Check()
+	require.False(t, st.UpdateAvailable)
+	require.Equal(t, deployed, st.Current)
 }
 
 func TestUpdateManager_Check_remoteError(t *testing.T) {
@@ -109,6 +125,9 @@ func TestUpdateManager_Run_alreadyUpToDate(t *testing.T) {
 		return nil, nil
 	})
 	deps := newTestDepsWithUpdate(t, nil)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(deps.Config.UpdateInstallDir, ".pubobs-version"),
+		[]byte(api.Version+"\n"), 0644))
 
 	require.NoError(t, deps.Update.Start())
 	require.Eventually(t, func() bool {
