@@ -2,6 +2,7 @@ package gitcache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -26,20 +27,81 @@ type SyncAsset struct {
 	Content []byte // decoded binary
 }
 
+// AuthFailBackoff is how long getOrClone will short-circuit straight to a
+// cached error for a repo after a network op most recently failed with an
+// auth-classified error (ErrGitAuthFailed), instead of re-attempting the
+// same doomed clone/fetch and paying a full DefaultGitOpTimeout again.
+//
+// Auth failures are not self-healing: unlike a corrupted local clone (which
+// wipe-and-reclone genuinely fixes) or a transient network blip (which a
+// retry genuinely fixes), bad/missing/expired credentials will fail exactly
+// the same way on every attempt until an operator re-enters correct
+// credentials via the repo's settings — so retrying immediately on every
+// single incoming request just multiplies the cost of the same failure
+// (e.g. every ListFiles call for the repo eating the full timeout) without
+// any chance of a different outcome. The backoff is intentionally short
+// (not the same as the repo cache TTL) so a credential fix takes effect on
+// the next request shortly after being saved, rather than requiring a
+// restart or a long wait. Exported as a var (rather than a const) so tests
+// can shrink it to keep runtime fast.
+var AuthFailBackoff = 30 * time.Second
+
 // Cache manages per-repo local git clones.
 type Cache struct {
 	baseDir string
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 	git     *GitRunner
+
+	authFailMu   sync.Mutex
+	authFailedAt map[string]time.Time
+	authFailErr  map[string]error
 }
 
 func NewCache(baseDir string) *Cache {
 	return &Cache{
-		baseDir: baseDir,
-		locks:   make(map[string]*sync.Mutex),
-		git:     NewGitRunner(),
+		baseDir:      baseDir,
+		locks:        make(map[string]*sync.Mutex),
+		git:          NewGitRunner(),
+		authFailedAt: make(map[string]time.Time),
+		authFailErr:  make(map[string]error),
 	}
+}
+
+// SetGitTimeout overrides how long any single network git operation
+// (clone/fetch/push) may run before it is killed and reported as a failure.
+// Primarily useful for tests; production code can leave this at
+// DefaultGitOpTimeout.
+func (c *Cache) SetGitTimeout(d time.Duration) {
+	c.git.Timeout = d
+}
+
+// recentAuthFailure returns the cached error from a recent auth failure for
+// repoID, if one occurred within AuthFailBackoff, without touching git or
+// the network at all.
+func (c *Cache) recentAuthFailure(repoID string) error {
+	c.authFailMu.Lock()
+	defer c.authFailMu.Unlock()
+	at, ok := c.authFailedAt[repoID]
+	if !ok || time.Since(at) > AuthFailBackoff {
+		return nil
+	}
+	return c.authFailErr[repoID]
+}
+
+// recordGitOpResult updates the auth-failure backoff state for repoID: a
+// success (or any non-auth error) clears it, since only a confirmed auth
+// rejection should suppress future retries.
+func (c *Cache) recordGitOpResult(repoID string, err error) {
+	c.authFailMu.Lock()
+	defer c.authFailMu.Unlock()
+	if errors.Is(err, ErrGitAuthFailed) {
+		c.authFailedAt[repoID] = time.Now()
+		c.authFailErr[repoID] = err
+		return
+	}
+	delete(c.authFailedAt, repoID)
+	delete(c.authFailErr, repoID)
 }
 
 func (c *Cache) repoLock(repoID string) *sync.Mutex {
@@ -78,8 +140,19 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 	dir := c.repoDir(repo.ID)
 	gitDir := filepath.Join(dir, ".git")
 
+	// A recent, still-fresh auth failure for this repo means the last
+	// clone/fetch attempt was rejected for bad/missing credentials. That
+	// won't have changed on its own, so skip straight to the cached error
+	// instead of re-running (and re-timing-out) the exact same doomed
+	// network operation on every request.
+	if err := c.recentAuthFailure(repo.ID); err != nil {
+		return "", err
+	}
+
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		return dir, c.freshClone(dir, repo, credJSON)
+		err := c.freshClone(dir, repo, credJSON)
+		c.recordGitOpResult(repo.ID, err)
+		return dir, err
 	}
 
 	if err := clearStaleGitLocks(gitDir); err != nil {
@@ -88,12 +161,17 @@ func (c *Cache) getOrClone(repo *model.Repo, credJSON string) (string, error) {
 
 	if !c.git.IsHealthy(dir) {
 		log.Printf("gitcache: local clone for %s is corrupted/incomplete, re-cloning from scratch", repo.ID)
-		return dir, c.freshClone(dir, repo, credJSON)
+		err := c.freshClone(dir, repo, credJSON)
+		c.recordGitOpResult(repo.ID, err)
+		return dir, err
 	}
 
 	if err := c.git.FetchReset(dir, repo.RemoteURL, credJSON, repo.DefaultBranch); err != nil {
-		return "", fmt.Errorf("fetch-reset %s: %w", repo.ID, err)
+		err = fmt.Errorf("fetch-reset %s: %w", repo.ID, err)
+		c.recordGitOpResult(repo.ID, err)
+		return "", err
 	}
+	c.recordGitOpResult(repo.ID, nil)
 	return dir, nil
 }
 
@@ -178,6 +256,7 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 	}
 
 	sha, err := c.git.AddCommitPush(dir, repo.RemoteURL, credJSON, repo.DefaultBranch, commitMsg)
+	c.recordGitOpResult(repo.ID, err)
 	if err != nil {
 		return "", fmt.Errorf("commit+push: %w", err)
 	}
@@ -315,5 +394,6 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 
 	_, err = c.git.AddCommitPush(dir, repo.RemoteURL, credJSON, repo.DefaultBranch,
 		fmt.Sprintf("pubobs: comment on %s", notePath))
+	c.recordGitOpResult(repo.ID, err)
 	return err
 }

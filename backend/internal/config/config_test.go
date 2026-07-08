@@ -24,6 +24,7 @@ func TestLoad_defaults(t *testing.T) {
 	require.Equal(t, "8080", cfg.Port)
 	require.Equal(t, 24*time.Hour, cfg.RepoCacheTTL)
 	require.Equal(t, time.Hour, cfg.CacheCheckInterval)
+	require.Equal(t, 25*time.Second, cfg.GitOpTimeout)
 	require.Equal(t, float64(20), cfg.DiskWarnPct)
 	require.Equal(t, float64(5), cfg.DiskCritPct)
 	require.NotEmpty(t, cfg.RepoCacheDir)
@@ -49,4 +50,12 @@ func TestLoad_customDuration(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 	require.Equal(t, 48*time.Hour, cfg.RepoCacheTTL)
+}
+
+func TestLoad_customGitOpTimeout(t *testing.T) {
+	withRequiredEnv(t)
+	t.Setenv("PUBOBS_GIT_OP_TIMEOUT", "10s")
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Second, cfg.GitOpTimeout)
 }

@@ -82,9 +82,12 @@ func main() {
 		log.Fatalf("storage resolver: %v", err)
 	}
 
+	repoCache := gitcache.NewCache(cfg.RepoCacheDir)
+	repoCache.SetGitTimeout(cfg.GitOpTimeout)
+
 	deps := &api.Deps{
 		Store:         appStore,
-		Cache:         gitcache.NewCache(cfg.RepoCacheDir),
+		Cache:         repoCache,
 		Auth:          auth.NewSessionStore(),
 		OIDCProviders: providers,
 		Config:        cfg,
