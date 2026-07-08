@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/rborisov/pubobs/main/install.sh -o 
 sudo bash /tmp/pubobs-install.sh --update
 ```
 
-This pulls the latest binary from GitHub, rebuilds the Docker image, and restarts the container. Your data and `.env` are untouched.
+This pulls the latest binary from GitHub, rebuilds the Docker image, and restarts the container. Your data and `.env` are untouched. Once the new container is confirmed healthy, the installer also prunes dangling Docker images and stale build cache left over from the rebuild — useful on small VPS instances where disk space is tight.
 
 > **Note:** Piping directly to bash (`curl | bash --update`) does not work — save the script first, then run it.
 
@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/rborisov/pubobs/main/install.sh -o 
 sudo bash /tmp/pubobs-install.sh --reinstall
 ```
 
-You will be asked whether to keep or wipe the database and repo cache.
+You will be asked whether to keep or wipe the database and repo cache. Like `--update`, it prunes leftover Docker images/build cache once the reinstalled container is healthy.
 
 ---
 

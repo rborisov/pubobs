@@ -257,6 +257,25 @@ wait_healthy() {
   die "App did not become healthy within 60 seconds"
 }
 
+cleanup_docker() {
+  info "Cleaning up old Docker images to free disk space..."
+  # The compose file has no explicit `image:` tag, so `docker compose build`
+  # always (re)builds the same "<project>-pubobs:latest" name/tag. Each
+  # rebuild just moves that tag to the new image and leaves the previous one
+  # behind as a dangling (<none>:<none>) image — it's never referenced again.
+  # Plain `-f` (no `-a`) only removes those dangling images, which is exactly
+  # what repeated updates pile up here. We deliberately avoid `-a` because it
+  # would also delete other *tagged but unused* images the operator may have
+  # on this box for unrelated purposes — this installer has no business
+  # silently removing those.
+  docker image prune -f || warn "Docker image cleanup failed (non-fatal)"
+  # Build cache is fully regenerable from source, so it's safe to clear
+  # unconditionally — no --filter until=... window. A rapid re-run rebuilds
+  # cache from the same on-disk layers in seconds anyway, so keeping a stale
+  # cache around buys little, and a small VPS can't spare the disk for it.
+  docker builder prune -f || warn "Docker build cache cleanup failed (non-fatal)"
+}
+
 # ── nginx / TLS ───────────────────────────────────────────────────────────────
 
 configure_nginx() {
@@ -397,6 +416,7 @@ do_update() {
 
   build_app
   restart_containers
+  cleanup_docker
   success "Updated to ${new_ver:0:8}"
 }
 
@@ -438,6 +458,8 @@ do_reinstall() {
     wait_healthy
     success "Data restored from $backup_dir"
   fi
+
+  cleanup_docker
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
