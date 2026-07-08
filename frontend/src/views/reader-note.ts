@@ -15,9 +15,15 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:40px 24px;font-family:system-ui,sans-serif';
 
-  // Inject Obsidian's theme CSS once per page load, with targeted patches for rules
-  // that break normal browser layout (overflow:hidden on body, fixed heights, etc.)
-  if (!document.getElementById('obsidian-theme-css')) {
+  // Inject Obsidian's theme CSS once per repo, with targeted patches for rules
+  // that break normal browser layout (overflow:hidden on body, fixed heights,
+  // etc.). The router removes this element whenever you leave the reader, so
+  // it never bleeds into the admin panel — but within the reader, cache it
+  // per repo (rather than once ever) so switching repos picks up that
+  // repo's own theme instead of keeping whichever loaded first.
+  const existing = document.getElementById('obsidian-theme-css');
+  if (existing?.getAttribute('data-repo-id') !== repoId) {
+    existing?.remove();
     const cssText = await fetch(`/pub/${repoId}/assets/_pubobs/obsidian.css`)
       .then(r => r.ok ? r.text() : '')
       .catch(() => '');
@@ -25,6 +31,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     if (cssText) {
       const style = document.createElement('style');
       style.id = 'obsidian-theme-css';
+      style.setAttribute('data-repo-id', repoId);
       style.textContent = patchObsidianCSS(cssText);
       document.head.appendChild(style);
     }
