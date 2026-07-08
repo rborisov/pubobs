@@ -7,6 +7,7 @@ import { repoDetailView } from './views/repo-detail';
 import { usersView } from './views/users';
 import { allowlistView } from './views/allowlist';
 import { storageSettingsView } from './views/storage-settings';
+import { updatesView } from './views/updates';
 import { dashboardView } from './views/dashboard';
 import { readerListView } from './views/reader-list';
 import { readerNoteView } from './views/reader-note';
@@ -20,6 +21,7 @@ register('/repos/:id', ({ id }) => repoDetailView(id));
 register('/users', () => usersView(currentUser!));
 register('/allowlist', () => allowlistView());
 register('/storage', () => storageSettingsView());
+register('/updates', () => updatesView());
 register('/dashboard', () => dashboardView(currentUser!));
 register('/groups', () => groupsView(currentUser!));
 register('/read/:repoId', ({ repoId }) => readerListView(repoId, currentUser));
@@ -126,6 +128,7 @@ function renderNav(app: HTMLElement, me: Me): void {
       <a href="#/users" style="${linkStyle}">Users</a>
       <a href="#/allowlist" style="${linkStyle}">Allowlist</a>
       <a href="#/storage" style="${linkStyle}">Storage</a>
+      <a href="#/updates" style="${linkStyle}">Updates</a>
       <span style="flex:1"></span>
       <button id="signout-btn"
         style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;

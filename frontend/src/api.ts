@@ -492,6 +492,31 @@ export async function getStorageUsage(): Promise<StorageUsage> {
   return json<StorageUsage>(await authedFetch('/api/admin/storage-usage'));
 }
 
+export interface UpdateStatus {
+  status: string; // "idle" | "running" | "done" | "error"
+  current: string;
+  current_short: string;
+  latest: string;
+  latest_short: string;
+  update_available: boolean;
+  maintenance: boolean;
+  message?: string;
+  log?: string;
+  updated_at: string;
+}
+
+export async function checkUpdate(): Promise<UpdateStatus> {
+  return json<UpdateStatus>(await authedFetch('/api/admin/update/check'));
+}
+
+export async function startUpdate(): Promise<UpdateStatus> {
+  return json<UpdateStatus>(await authedFetch('/api/admin/update/start', { method: 'POST' }));
+}
+
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  return json<UpdateStatus>(await authedFetch('/api/admin/update/status'));
+}
+
 export async function assignRepoStorage(repoId: string, destinationId: string | null): Promise<void> {
   const resp = await authedFetch(`/api/admin/repos/${repoId}/storage`, {
     method: 'PUT',
