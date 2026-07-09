@@ -67,7 +67,6 @@ func BuildRouter(deps *Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(maintenanceMode(deps))
 	r.Use(decompressRequestBody)
 
 	// Auth (unauthenticated)
@@ -126,9 +125,6 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Delete("/api/admin/storage-destinations/{id}", handleAdminDeleteDestination(deps))
 		r.Put("/api/admin/repos/{id}/storage", handleAdminAssignRepoStorage(deps))
 		r.Get("/api/admin/storage-usage", handleAdminStorageUsage(deps))
-		r.Get("/api/admin/update/check", handleAdminUpdateCheck(deps))
-		r.Post("/api/admin/update/start", handleAdminUpdateStart(deps))
-		r.Get("/api/admin/update/status", handleAdminUpdateStatus(deps))
 	})
 
 	// Public reader (no auth)

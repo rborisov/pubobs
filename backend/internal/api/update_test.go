@@ -2,10 +2,7 @@
 package api_test
 
 import (
-	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -235,98 +232,4 @@ func TestCopyUpdateFiles_missingSourceFile(t *testing.T) {
 	dest := t.TempDir()
 	err := api.CopyUpdateFiles(src, dest, "amd64")
 	require.Error(t, err)
-}
-
-func TestAdminUpdateEndpoints_requireAdmin(t *testing.T) {
-	stubLatestVersion(t, func(string, string) (string, error) { return "abc123", nil })
-	deps := newTestDepsWithUpdate(t, nil)
-	deps.Store.UpsertUser(context.Background(), "u1", "user@x.com", "User")
-
-	for _, tc := range []struct {
-		method, path string
-	}{
-		{"GET", "/api/admin/update/check"},
-		{"POST", "/api/admin/update/start"},
-		{"GET", "/api/admin/update/status"},
-	} {
-		req := httptest.NewRequest(tc.method, tc.path, nil)
-		req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "user@x.com", false))
-		rr := httptest.NewRecorder()
-		api.BuildRouter(deps).ServeHTTP(rr, req)
-		require.Equal(t, http.StatusForbidden, rr.Code, "%s %s should require instance admin", tc.method, tc.path)
-	}
-}
-
-func TestAdminUpdateEndpoints_adminFlow(t *testing.T) {
-	stubLatestVersion(t, func(string, string) (string, error) { return "abc123", nil })
-	stubRunUpdateCmd(t, func(dir, name string, args ...string) ([]byte, error) {
-		return nil, errors.New("stubbed: no real git/docker in this test")
-	})
-	deps := newTestDepsWithUpdate(t, nil)
-	deps.Store.UpsertUser(context.Background(), "admin1", "admin@x.com", "Admin")
-	deps.Store.SetInstanceAdmin(context.Background(), "admin1", true)
-	auth := bearerHeader(t, deps, "admin1", "admin@x.com", true)
-
-	req := httptest.NewRequest("GET", "/api/admin/update/check", nil)
-	req.Header.Set("Authorization", auth)
-	rr := httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-
-	req = httptest.NewRequest("POST", "/api/admin/update/start", nil)
-	req.Header.Set("Authorization", auth)
-	rr = httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
-
-	// A second concurrent start is rejected with 409.
-	req = httptest.NewRequest("POST", "/api/admin/update/start", nil)
-	req.Header.Set("Authorization", auth)
-	rr = httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
-
-	req = httptest.NewRequest("GET", "/api/admin/update/status", nil)
-	req.Header.Set("Authorization", auth)
-	rr = httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-}
-
-func TestMaintenanceMode_blocksDuringUpdate_exceptEssentialRoutes(t *testing.T) {
-	release := make(chan struct{})
-	stubLatestVersion(t, func(string, string) (string, error) {
-		<-release
-		return "", errors.New("stubbed")
-	})
-	defer close(release)
-	deps := newTestDepsWithUpdate(t, nil)
-	deps.Store.UpsertUser(context.Background(), "admin1", "admin@x.com", "Admin")
-	deps.Store.SetInstanceAdmin(context.Background(), "admin1", true)
-	auth := bearerHeader(t, deps, "admin1", "admin@x.com", true)
-
-	require.NoError(t, deps.Update.Start())
-	require.Eventually(t, func() bool {
-		return deps.Update.State().Maintenance
-	}, time.Second, 5*time.Millisecond)
-
-	// Health check must stay reachable during maintenance.
-	req := httptest.NewRequest("GET", "/healthz", nil)
-	rr := httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	// Update status must stay reachable during maintenance (so the UI can poll it).
-	req = httptest.NewRequest("GET", "/api/admin/update/status", nil)
-	req.Header.Set("Authorization", auth)
-	rr = httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	// An ordinary API route must be blocked with 503 during maintenance.
-	req = httptest.NewRequest("GET", "/api/me", nil)
-	req.Header.Set("Authorization", auth)
-	rr = httptest.NewRecorder()
-	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
