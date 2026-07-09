@@ -113,6 +113,23 @@ export function ensureReaderStyles(): void {
       background: var(--r-tag-bg); color: var(--r-tag-text); white-space: nowrap;
     }
     .r-note-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 12px; }
+    /* Make the selection highlight visible. Obsidian's CSS sets
+       ::selection { background-color: var(--text-selection) }, but
+       --text-selection resolves through --color-accent-hsl, which the theme
+       only defines under .theme-light/.theme-dark — classes our reader page
+       (body.pubobs-reader-theme) never sets. So the variable is invalid here
+       and the highlight paints transparent: text selects (and copies) fine but
+       you can't see it. Define a concrete, theme-aware highlight that doesn't
+       depend on Obsidian's accent chain, specific enough to beat the theme's
+       bare ::selection rule. ::selection and ::-moz-selection can't be grouped
+       (an unknown pseudo invalidates the whole selector list), so keep them
+       as separate rules. */
+    body.pubobs-reader-theme ::selection { background: rgba(91, 107, 142, 0.35); }
+    body.pubobs-reader-theme ::-moz-selection { background: rgba(91, 107, 142, 0.35); }
+    @media (prefers-color-scheme: dark) {
+      body.pubobs-reader-theme ::selection { background: rgba(128, 148, 175, 0.45); }
+      body.pubobs-reader-theme ::-moz-selection { background: rgba(128, 148, 175, 0.45); }
+    }
     /* Force rendered notes to be selectable/copyable. Obsidian themes (and
        the app CSS they mimic) frequently set user-select:none on the preview
        view; rewriting that arbitrary CSS is fragile (vendor prefixes, !important,
