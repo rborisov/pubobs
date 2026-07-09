@@ -1,6 +1,7 @@
 package gitcache
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +112,42 @@ func TestCommentsFilePath(t *testing.T) {
 		if got != c.want {
 			t.Errorf("CommentsFilePath(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSanitizeCommentName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Alice", "Alice"},
+		{"  Bob  ", "Bob"},
+		{"", ""},
+		{"   ", ""},
+		{"a | b", "a  b"},                       // pipe neutralized to space
+		{"line1\nline2", "line1 line2"},          // newline -> space
+		{"line1\r\nline2", "line1 line2"},         // CRLF -> single space
+		{"### hi", "hi"},                          // leading ### stripped
+		{"#### still hi", "still hi"},
+		{"###", ""},
+	}
+	for _, c := range cases {
+		if got := SanitizeCommentName(c.in); got != c.want {
+			t.Errorf("SanitizeCommentName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// length cap
+	long := strings.Repeat("x", 250)
+	if got := SanitizeCommentName(long); len([]rune(got)) != 100 {
+		t.Errorf("expected 100-rune cap, got %d", len([]rune(got)))
+	}
+}
+
+func TestFormatComment_sanitizesName(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	formatted := FormatComment("evil | name\n### fake", "", "hi", "", ts)
+	if strings.Contains(formatted, "|") {
+		t.Errorf("formatted comment header leaks a pipe: %q", formatted)
+	}
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + formatted)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one parsed comment, got %d: %+v", len(got), got)
 	}
 }

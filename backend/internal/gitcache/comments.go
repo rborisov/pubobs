@@ -25,9 +25,27 @@ func commentsFileHeader(notePath string) string {
 	return fmt.Sprintf("---\ntype: comments\nnote: %s\n---\n\n", notePath)
 }
 
+// SanitizeCommentName makes a user-supplied display name safe to store in the
+// pipe-delimited, "\n### "-record comments file: it strips line breaks,
+// neutralizes the "|" field separator, removes a leading "#"/space run so the
+// name can't start a "### " comment header, trims, and caps length. Returns ""
+// for empty/whitespace-only input; callers apply their own default (e.g.
+// "anonym").
+func SanitizeCommentName(name string) string {
+	name = strings.ReplaceAll(name, "\r\n", " ")
+	name = strings.NewReplacer("\r", " ", "\n", " ", "|", "").Replace(name)
+	name = strings.TrimLeft(name, "# \t")
+	name = strings.TrimSpace(name)
+	if r := []rune(name); len(r) > 100 {
+		name = strings.TrimSpace(string(r[:100]))
+	}
+	return name
+}
+
 // FormatComment formats a single comment block for appending to a comments file.
 // noteCommitSHA is the git_commit_sha of the note at the time of posting.
 func FormatComment(name, email, body, noteCommitSHA string, ts time.Time) string {
+	name = SanitizeCommentName(name)
 	return fmt.Sprintf("### %s | %s | %s | %s\n\n%s\n",
 		name, ts.UTC().Format(time.RFC3339), email, noteCommitSHA, strings.TrimSpace(body))
 }
