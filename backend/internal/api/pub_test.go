@@ -243,6 +243,43 @@ func TestPubGetNote_shareKeyOnlyVisitorSeesGuestRole(t *testing.T) {
 	require.Equal(t, true, resp["shared_publicly"])
 }
 
+// TestPubGetNote_shareKeyOnlyVisitor_backlinksHidden verifies backlinks
+// (paths + titles of OTHER notes) are withheld from a share-link-only
+// visitor — who must not be able to enumerate the rest of a guest-closed
+// repo — while a real repo member still receives them.
+func TestPubGetNote_shareKeyOnlyVisitor_backlinksHidden(t *testing.T) {
+	deps, key := setupPubAccessTest(t, false, true)
+	ctx := context.Background()
+
+	// Seed another note linking to docs/intro.md, producing one backlink.
+	other, err := deps.Store.UpsertNote(ctx, "r1", "docs/other.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, other.ID, "<h1>Other</h1>", "{}", "u1", "sha2"))
+	require.NoError(t, deps.Store.UpsertNoteLinks(ctx, other.ID, []string{"docs/intro.md"}))
+
+	// Share-link-only visitor (valid ?key=, no repo role): no backlinks.
+	rr := getPubNote(deps, "?key="+key)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var guestResp struct {
+		Backlinks []map[string]any `json:"backlinks"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&guestResp))
+	require.Empty(t, guestResp.Backlinks, "share-link-only visitor must not receive backlinks")
+
+	// Real repo member (bearer token): backlinks present, unchanged.
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	memberRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(memberRR, req)
+	require.Equal(t, http.StatusOK, memberRR.Code, memberRR.Body.String())
+	var memberResp struct {
+		Backlinks []map[string]any `json:"backlinks"`
+	}
+	require.NoError(t, json.NewDecoder(memberRR.Body).Decode(&memberResp))
+	require.Len(t, memberResp.Backlinks, 1, "repo member must still receive backlinks")
+	require.Equal(t, "docs/other.md", memberResp.Backlinks[0]["path"])
+}
+
 // TestPubListNotes_reportsRoleAndPerNoteSharedState verifies
 // handlePubListNotes surfaces the caller's real role and each note's
 // shared_publicly state without misreporting an unshared note as shared.

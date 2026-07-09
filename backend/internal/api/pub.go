@@ -237,18 +237,28 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 		_ = json.Unmarshal([]byte(snap.MetadataJSON), &meta)
 
-		backlinks, _ := deps.Store.GetBacklinks(r.Context(), repoID, notePath)
+		hasRepoAccess := pubRepoAccess(r, deps, repoID) != nil
+
 		type backlinkItem struct {
 			Path  string `json:"path"`
 			Title string `json:"title"`
 		}
-		bl := make([]backlinkItem, 0, len(backlinks))
-		for _, b := range backlinks {
-			bsnap, _ := deps.Store.GetSnapshot(r.Context(), b.ID)
-			bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
+		// Backlinks are repo-scoped metadata (paths + titles of OTHER notes)
+		// and must never reach a share-link-only visitor, who is authorized
+		// for just this one shared note via its ?key=. Leaking them would let
+		// such a visitor enumerate other notes in a guest-closed repo — the
+		// same reason comments are gated above, and the "cannot enumerate
+		// notes" invariant in the design doc. Guest-open repos and real repo
+		// members both have hasRepoAccess, so they keep backlinks unchanged.
+		bl := make([]backlinkItem, 0)
+		if hasRepoAccess {
+			backlinks, _ := deps.Store.GetBacklinks(r.Context(), repoID, notePath)
+			for _, b := range backlinks {
+				bsnap, _ := deps.Store.GetSnapshot(r.Context(), b.ID)
+				bl = append(bl, backlinkItem{Path: b.Path, Title: noteTitle(b.Path, bsnap)})
+			}
 		}
 
-		hasRepoAccess := pubRepoAccess(r, deps, repoID) != nil
 		render := resolveNoteHTML(r.Context(), deps, repo, notePath, note, snap, hasRepoAccess)
 
 		resp := map[string]any{
