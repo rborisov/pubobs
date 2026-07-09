@@ -392,6 +392,30 @@ describe('SyncManager.syncRepo', () => {
     expect(deletedPaths).toContain('notes/pulled-then-deleted.md');
   });
 
+  // Regression: a file that still EXISTS in the vault but momentarily fails
+  // to read (e.g. a transient IO error) must never be mistaken for a
+  // deletion. Before the fix, currentRepoPaths was populated only after a
+  // successful read, so a read failure dropped the path from it and the push
+  // phase propagated a bogus deletion to git + DB + render store, destroying
+  // a live (possibly shared) note until the next sync recreated it.
+  test('does not treat a read failure on an existing file as a deletion', async () => {
+    const app = makeMockApp({ 'Published/notes/readfail.md': true });
+    app.vault.read = jest.fn().mockRejectedValue(new Error('EIO: simulated read failure'));
+    const client = makeMockClient([]);
+    const settings = makeSettings();
+    // The vault previously pushed this note, so it's a deletion candidate.
+    (settings as any).syncHashes = { 'repo-1': { 'notes/readfail.md': 'prev-hash' } };
+    const save = jest.fn().mockResolvedValue(undefined);
+    const manager = new SyncManager(app as any, client as any, settings as any, save);
+
+    await manager.syncRepo('repo-1');
+
+    // Unreadable this run, so nothing to push and — crucially — nothing to
+    // delete, so sync must not be invoked. If the path were wrongly treated
+    // as deleted, sync would fire with it in deleted_paths.
+    expect(client.sync).not.toHaveBeenCalled();
+  });
+
   test('skips unchanged notes when syncHashes match, unless force is set', async () => {
     const TFileMock = (jest.requireMock('obsidian') as any).TFile;
     const file = { path: 'Published/notes/foo.md', extension: 'md', basename: 'foo' };

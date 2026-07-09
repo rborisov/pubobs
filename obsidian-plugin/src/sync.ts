@@ -262,16 +262,23 @@ export class SyncManager {
 
     for (let i = 0; i < vaultFiles.length; i++) {
       const f = vaultFiles[i];
+
+      // Record the path as present BEFORE any fallible work (reading or
+      // rendering). currentRepoPaths drives deletion detection below: a path
+      // in knownPaths but missing here is treated as a deletion and
+      // propagated to git + DB + render store. A file that genuinely exists
+      // but momentarily fails to read must never be mistaken for a deletion,
+      // so its presence can't hinge on the read succeeding. The path is pure
+      // string math off f.path, so it can't throw and is safe outside try.
+      let relative = f.path;
+      if (vaultFolder && relative.startsWith(vaultFolder + '/')) {
+        relative = relative.slice(vaultFolder.length + 1);
+      }
+      const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
+      currentRepoPaths.add(repoPath);
+
       try {
         const content = await this.app.vault.read(f);
-
-        let relative = f.path;
-        if (vaultFolder && relative.startsWith(vaultFolder + '/')) {
-          relative = relative.slice(vaultFolder.length + 1);
-        }
-        const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
-        currentRepoPaths.add(repoPath);
-
         const hash = fnv1a(content);
         newHashes[repoPath] = hash;
 
