@@ -210,6 +210,18 @@ This removes the repo from PubObs (the remote git repo is not affected).`))try{a
       background: var(--r-tag-bg); color: var(--r-tag-text); white-space: nowrap;
     }
     .r-note-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 12px; }
+    /* Force rendered notes to be selectable/copyable. Obsidian themes (and
+       the app CSS they mimic) frequently set user-select:none on the preview
+       view; rewriting that arbitrary CSS is fragile (vendor prefixes, !important,
+       selectors we don't match), so instead we win here with a selector more
+       specific than any single-class theme rule \u2014 body carries
+       .pubobs-reader-theme, so this is (0,2,x) vs the theme's (0,1,x). */
+    body.pubobs-reader-theme .markdown-rendered,
+    body.pubobs-reader-theme .markdown-rendered * {
+      -webkit-user-select: text !important;
+      user-select: text !important;
+      -webkit-touch-callout: default !important;
+    }
     .markdown-rendered table {
       border-collapse: collapse !important; width: 100%; margin: 1.5em 0;
       font-size: 0.9em;
