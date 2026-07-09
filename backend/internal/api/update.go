@@ -128,10 +128,13 @@ type updateState struct {
 // persistent full source checkout is ever kept, matching install.sh's own
 // `--update` path — copying just the 3 files the live deployment needs
 // (Dockerfile, docker-compose.yml, and the prebuilt binary for the host
-// architecture) over UpdateInstallDir, then running
-// `docker compose up -d --build` to rebuild and restart. This gives admins
-// a one-click alternative to SSHing in and running `bash install.sh update`
-// by hand, using the exact same underlying approach.
+// architecture) over UpdateInstallDir, then rebuilding the image
+// (`docker compose build`), writing the version marker, pruning old images,
+// and finally recreating the container (`docker compose up -d`). That last
+// step kills this process — it runs inside the container being replaced — so
+// the marker/prune deliberately happen before it, not after (see run). This
+// gives admins a one-click alternative to SSHing in and running
+// `bash install.sh update` by hand, using the exact same underlying approach.
 type UpdateManager struct {
 	mu    sync.Mutex
 	cfg   *config.Config
@@ -277,17 +280,56 @@ func (m *UpdateManager) run() {
 		return
 	}
 
-	m.setMessage("Rebuilding and restarting application")
 	backendDir := filepath.Join(m.cfg.UpdateInstallDir, "backend")
-	if err := m.runCmd(backendDir, "docker", "compose", "up", "-d", "--build"); err != nil {
-		m.fail("Restart application", err)
+
+	// Build the new image as its own step that runs to completion while this
+	// updater process is still alive. Everything past the container
+	// recreation below executes on borrowed time: `docker compose up`
+	// recreates the very container this code runs in, killing this process
+	// mid-command — so anything that must survive the update has to happen
+	// BEFORE that point, not after. (install.sh --update can do these steps
+	// after its restart because it drives the same rebuild from the host; we
+	// can't, which is exactly what used to leave this update half-finished.)
+	m.setMessage("Building new image")
+	if err := m.runCmd(backendDir, "docker", "compose", "build"); err != nil {
+		m.fail("Build image", err)
 		return
 	}
 
-	if err := os.WriteFile(filepath.Join(m.cfg.UpdateInstallDir, ".pubobs-version"), []byte(latest+"\n"), 0644); err != nil {
+	// Record the deployed version now, before the self-restart — mirroring
+	// install.sh --update writing .pubobs-version ahead of restarting
+	// containers. Writing it after `up` (as this code used to) meant the
+	// restart killed us first and the marker was never updated, so the
+	// Updates page kept reporting this just-applied update as still
+	// available forever.
+	if err := os.WriteFile(filepath.Join(m.cfg.UpdateInstallDir, deployedVersionFile), []byte(latest+"\n"), 0644); err != nil {
 		m.appendLog("Could not write version marker: " + err.Error() + "\n")
 	}
+
+	// Prune the dangling image and build cache this rebuild just orphaned,
+	// still while alive — install.sh does this in cleanup_docker, but it runs
+	// that after the restart because it's on the host; we have to do it here.
+	// Best-effort: a failed prune must never fail the update itself.
+	m.setMessage("Cleaning up old images")
+	if err := m.runCmd(backendDir, "docker", "image", "prune", "-f"); err != nil {
+		m.appendLog("Docker image prune failed (non-fatal): " + err.Error() + "\n")
+	}
+	if err := m.runCmd(backendDir, "docker", "builder", "prune", "-f"); err != nil {
+		m.appendLog("Docker build cache prune failed (non-fatal): " + err.Error() + "\n")
+	}
+
+	// Mark the run done before triggering the restart, since we won't get
+	// control back once the container is recreated.
 	m.finish("Update applied. The service is restarting.")
+
+	// Recreate the container from the freshly built image — the last thing we
+	// do, because it kills this process. If it instead returns an error, the
+	// swap never happened (e.g. a bad compose file caught before recreation)
+	// and we're still alive to report it.
+	if err := m.runCmd(backendDir, "docker", "compose", "up", "-d"); err != nil {
+		m.fail("Restart application", err)
+		return
+	}
 }
 
 func (m *UpdateManager) runCmd(dir, name string, args ...string) error {

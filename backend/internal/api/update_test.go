@@ -144,6 +144,7 @@ func TestUpdateManager_Run_fullSuccess(t *testing.T) {
 	stubLatestVersion(t, func(string, string) (string, error) { return latestSHA, nil })
 
 	var ran []string
+	var dockerCalls [][]string
 	stubRunUpdateCmd(t, func(dir, name string, args ...string) ([]byte, error) {
 		ran = append(ran, name)
 		switch name {
@@ -164,7 +165,7 @@ func TestUpdateManager_Run_fullSuccess(t *testing.T) {
 				os.WriteFile(filepath.Join(cloneDir, "backend", "bin", "pubobs-linux-"+arch), []byte("binary"), 0755)
 			}
 		case "docker":
-			require.Equal(t, []string{"compose", "up", "-d", "--build"}, args)
+			dockerCalls = append(dockerCalls, args)
 		default:
 			t.Fatalf("unexpected command: %s %v", name, args)
 		}
@@ -179,6 +180,16 @@ func TestUpdateManager_Run_fullSuccess(t *testing.T) {
 
 	require.Contains(t, ran, "git")
 	require.Contains(t, ran, "docker")
+
+	// The rebuild/restart is split so the version marker and image pruning
+	// happen while the updater is still alive, before `up` recreates (and
+	// kills) this container — see UpdateManager.run.
+	require.Equal(t, [][]string{
+		{"compose", "build"},
+		{"image", "prune", "-f"},
+		{"builder", "prune", "-f"},
+		{"compose", "up", "-d"},
+	}, dockerCalls)
 
 	installDir := deps.Config.UpdateInstallDir
 	versionMarker, err := os.ReadFile(filepath.Join(installDir, ".pubobs-version"))
