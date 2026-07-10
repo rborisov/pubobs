@@ -46,6 +46,13 @@ exact check that authorizes reading the note itself:
 This replaces the `pubRepoAccess`-only gate on the read dispatcher and is the
 gate for the new write endpoint.
 
+**Email privacy:** comment authors are attributed by account identity when
+logged in (kept simple — no repo-role gate on identity). But a non-member
+viewer (no repo role — anonymous guest-open or share-link visitor) must not see
+members' full email addresses: `handlePubComments` exposes only the local part
+(before `@`) of `author_email` to non-members, while real members still receive
+the full address.
+
 ## Backend changes
 
 ### 1. Read comments — accept note-scoped access

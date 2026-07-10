@@ -844,6 +844,36 @@ func TestPubComments_wrongKeyDenied(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
+func TestPubComments_redactsMemberEmailForNonMembers(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open: anonymous is a non-member
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Alice | 2026-01-01T00:00:00Z | alice@company.com | sha1\n\nhi\n")
+
+	// Non-member (anonymous, guest-open) sees only the local part, never the domain.
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"author_email\":\"alice\"")
+	require.NotContains(t, rr.Body.String(), "alice@company.com")
+
+	// A real member (bearer token, reader role) still gets the full address.
+	req2 := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	req2.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+	require.Contains(t, rr2.Body.String(), "alice@company.com")
+}
+
 func TestPubPostComment_anonymousUsesDisplayNameThenAnonym(t *testing.T) {
 	deps, _ := newTestDepsForPub(t)
 	ctx := context.Background()

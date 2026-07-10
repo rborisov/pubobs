@@ -372,6 +372,16 @@ func resolveNoteHTML(ctx context.Context, deps *Deps, repo *model.Repo, notePath
 	return noteHTMLResult{}
 }
 
+// emailLocalPart returns the portion of an email address before "@", so a
+// non-member viewer never sees a member's full address/domain. Empty or
+// non-email values pass through unchanged.
+func emailLocalPart(email string) string {
+	if i := strings.Index(email, "@"); i >= 0 {
+		return email[:i]
+	}
+	return email
+}
+
 func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoID, notePath string) {
 	raw, err := deps.Cache.ReadRawFile(repoID, gitcache.CommentsFilePath(notePath))
 	if err != nil {
@@ -393,13 +403,21 @@ func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoI
 		Body        string `json:"body"`
 		IsOutdated  bool   `json:"is_outdated"`
 	}
+	// Non-members (anonymous guest-open or share-link visitors — no repo role)
+	// must not see members' full email addresses. Expose only the local part
+	// (before "@") to them; real members still get the full address.
+	isMember := callerRepoRole(r, deps, repoID) != ""
 	parsed := gitcache.ParseComments(raw)
 	out := make([]item, 0, len(parsed))
 	for _, c := range parsed {
 		isOutdated := c.NoteCommitSHA != "" && currentSHA != "" && c.NoteCommitSHA != currentSHA
+		email := c.AuthorEmail
+		if !isMember {
+			email = emailLocalPart(email)
+		}
 		out = append(out, item{
 			AuthorName:  c.AuthorName,
-			AuthorEmail: c.AuthorEmail,
+			AuthorEmail: email,
 			CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			Body:        c.Body,
 			IsOutdated:  isOutdated,
