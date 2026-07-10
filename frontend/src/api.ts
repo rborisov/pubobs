@@ -352,6 +352,10 @@ export interface PubNoteDetail {
   // visitor, or a share-link-only visitor) — only "editor"/"admin" should
   // ever see sharing controls.
   role: string;
+  // True when the caller can browse the whole repo (guest-open repo or a real
+  // member) rather than only this one note via ?key=. Drives whether "Back"
+  // goes to the repo note list or the login screen.
+  has_repo_access?: boolean;
 }
 
 // pubFetch attaches a Bearer token when the user is logged in so private repos

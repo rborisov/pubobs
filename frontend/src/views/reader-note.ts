@@ -69,16 +69,14 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   // embedded in old note content work again regardless of share state.
   const effectiveKey = urlKey;
 
-  // "Back" normally returns to the repo's note list. But a share-link-only
-  // visitor (a guest, reaching a single note on a guest-CLOSED repo via ?key=)
-  // has no access to that list — it would render "repo not found". Send those
-  // visitors to the login screen instead. Members and guest-open browsers
-  // (who reached the note without a key) keep the back-to-list behaviour.
-  const shareLinkOnly = !note.role || note.role === '';
+  // "Back" returns to the repo's note list when the visitor can actually
+  // browse the repo (a guest-open repo or a real member — both get
+  // has_repo_access). A share-link-only visitor on a guest-CLOSED repo has no
+  // access to that list — it would render "repo not found" — so send them to
+  // the login screen instead. Keyed access on a guest-OPEN repo still counts
+  // as repo access, so those links correctly go back to the list.
   const back = document.createElement('a');
-  back.href = (!isAuthenticated() && shareLinkOnly && effectiveKey)
-    ? '#/login'
-    : `#/read/${repoId}`;
+  back.href = note.has_repo_access ? `#/read/${repoId}` : '#/login';
   back.className = 'r-muted';
   back.style.cssText = 'font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
   back.textContent = '← Back';
@@ -130,7 +128,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   // decrypt the /render blob client-side with the ?key=. Ordering this the
   // other way round broke guest-open share links, whose stale key failed the
   // client decrypt even though usable server HTML was available.
-  // (shareLinkOnly is computed above, where the back link uses it too.)
+  const shareLinkOnly = !note.role || note.role === '';
   let htmlContent: string;
   if (note.html_content) {
     htmlContent = note.html_content;

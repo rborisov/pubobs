@@ -290,6 +290,11 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			// the frontend must not show editor-only sharing controls. See
 			// callerRepoRole's doc comment for the full rationale.
 			"role": callerRepoRole(r, deps, repoID),
+			// Whether the caller can browse the whole repo (guest-open repo or a
+			// real member) vs. only this one shared note via ?key=. The reader
+			// uses it to decide whether "Back" goes to the repo note list or the
+			// login screen. Distinct from role, which is "" for guest-open too.
+			"has_repo_access": hasRepoAccess,
 		}
 
 		if render.HTMLContent != "" {
