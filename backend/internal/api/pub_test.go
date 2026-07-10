@@ -824,6 +824,26 @@ func TestPubComments_shareLinkVisitorCanReadWithKey(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rr2.Code)
 }
 
+func TestPubComments_wrongKeyDenied(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Al | 2026-01-01T00:00:00Z |  | sha1\n\nhi\n")
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments?key=WRONG-KEY-VALUE", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
 func TestPubPostComment_anonymousUsesDisplayNameThenAnonym(t *testing.T) {
 	deps, _ := newTestDepsForPub(t)
 	ctx := context.Background()

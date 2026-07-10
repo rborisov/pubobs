@@ -250,11 +250,13 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 		// Backlinks are repo-scoped metadata (paths + titles of OTHER notes)
 		// and must never reach a share-link-only visitor, who is authorized
-		// for just this one shared note via its ?key=. Leaking them would let
-		// such a visitor enumerate other notes in a guest-closed repo — the
-		// same reason comments are gated above, and the "cannot enumerate
-		// notes" invariant in the design doc. Guest-open repos and real repo
-		// members both have hasRepoAccess, so they keep backlinks unchanged.
+		// for just this one shared note via its ?key=. Unlike per-note
+		// comments (gated by pubNoteAccess, which a share-link visitor
+		// satisfies), backlinks are deliberately held to the stricter
+		// repo-level gate below because they expose OTHER notes' paths and
+		// would let such a visitor enumerate a guest-closed repo. Guest-open
+		// repos and real repo members both have hasRepoAccess, so they keep
+		// backlinks unchanged.
 		bl := make([]backlinkItem, 0)
 		if hasRepoAccess {
 			backlinks, _ := deps.Store.GetBacklinks(r.Context(), repoID, notePath)
@@ -566,6 +568,7 @@ func handlePubPostComment(deps *Deps) http.HandlerFunc {
 			NoteCommitSHA string `json:"note_commit_sha"`
 			AuthorName    string `json:"author_name"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
 			writeError(w, http.StatusBadRequest, "body required")
 			return
