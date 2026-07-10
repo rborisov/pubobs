@@ -326,6 +326,7 @@ export interface PubNote {
   tags: string[];
   synced_at: string;
   shared_publicly: boolean;
+  comment_count: number;
 }
 
 export interface PubRepo {
@@ -356,12 +357,11 @@ export interface PubNoteDetail {
 // pubFetch attaches a Bearer token when the user is logged in so private repos
 // are accessible to authenticated readers, while still working for guests on
 // repos with allow_guest enabled.
-async function pubFetch(input: string): Promise<Response> {
+async function pubFetch(input: string, init?: RequestInit): Promise<Response> {
   const t = tokenStore.get();
-  if (t && !tokenStore.isExpired()) {
-    return fetchWithTimeout(input, { headers: { Authorization: `Bearer ${t.accessToken}` } });
-  }
-  return fetchWithTimeout(input);
+  const headers = new Headers(init?.headers);
+  if (t && !tokenStore.isExpired()) headers.set('Authorization', `Bearer ${t.accessToken}`);
+  return fetchWithTimeout(input, { ...init, headers });
 }
 
 export interface PubListNotesResponse {
@@ -422,8 +422,25 @@ export interface PubComment {
   is_outdated: boolean;
 }
 
-export async function pubListComments(repoId: string, notePath: string): Promise<PubComment[]> {
-  return json(await pubFetch(`/pub/${repoId}/notes/${encodeNotePath(notePath)}/comments`));
+export async function pubListComments(repoId: string, notePath: string, key?: string): Promise<PubComment[]> {
+  const qs = key ? `?key=${encodeURIComponent(key)}` : '';
+  return json(await pubFetch(`/pub/${repoId}/notes/${encodeNotePath(notePath)}/comments${qs}`));
+}
+
+export async function pubAddComment(
+  repoId: string,
+  notePath: string,
+  body: string,
+  noteCommitSha: string,
+  opts?: { authorName?: string; key?: string },
+): Promise<void> {
+  const qs = opts?.key ? `?key=${encodeURIComponent(opts.key)}` : '';
+  const resp = await pubFetch(`/pub/${repoId}/notes/${encodeNotePath(notePath)}/comments${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body, note_commit_sha: noteCommitSha, author_name: opts?.authorName ?? '' }),
+  });
+  if (!resp.ok) throw new Error((await resp.text().catch(() => '')) || 'failed to post comment');
 }
 
 export async function addComment(repoId: string, notePath: string, body: string, noteCommitSha: string): Promise<void> {
