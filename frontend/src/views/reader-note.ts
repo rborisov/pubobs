@@ -69,8 +69,16 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   // embedded in old note content work again regardless of share state.
   const effectiveKey = urlKey;
 
+  // "Back" normally returns to the repo's note list. But a share-link-only
+  // visitor (a guest, reaching a single note on a guest-CLOSED repo via ?key=)
+  // has no access to that list — it would render "repo not found". Send those
+  // visitors to the login screen instead. Members and guest-open browsers
+  // (who reached the note without a key) keep the back-to-list behaviour.
+  const shareLinkOnly = !note.role || note.role === '';
   const back = document.createElement('a');
-  back.href = `#/read/${repoId}`;
+  back.href = (!isAuthenticated() && shareLinkOnly && effectiveKey)
+    ? '#/login'
+    : `#/read/${repoId}`;
   back.className = 'r-muted';
   back.style.cssText = 'font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
   back.textContent = '← Back';
@@ -118,7 +126,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   // /render + ?key=. Repo members who open an old share URL while logged in
   // must NOT take this path — after unshare the URL's key is stale but the
   // server still decrypts for real repo access and returns html_content.
-  const shareLinkOnly = !note.role || note.role === '';
+  // (shareLinkOnly is computed above, where the back link uses it too.)
   let htmlContent: string;
   if (effectiveKey && shareLinkOnly) {
     try {
