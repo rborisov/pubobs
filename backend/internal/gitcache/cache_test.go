@@ -332,3 +332,23 @@ func TestCache_AppendComment(t *testing.T) {
 	require.Contains(t, content, "Alice", "should still contain first author after second comment")
 	require.Contains(t, content, "Bob", "should contain second author")
 }
+
+func TestCache_CommentCounts(t *testing.T) {
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+	base := filepath.Join(cacheDir, "r1", "docs")
+	require.NoError(t, os.MkdirAll(base, 0o755))
+	// two comments on docs/intro.md
+	require.NoError(t, os.WriteFile(filepath.Join(base, "intro-comments.md"),
+		[]byte("---\ntype: comments\n---\n\n### A | 2026-01-01T00:00:00Z |  | s\n\nx\n### B | 2026-01-02T00:00:00Z |  | s\n\ny\n"), 0o644))
+
+	counts, err := cache.CommentCounts("r1")
+	require.NoError(t, err)
+	require.Equal(t, 2, counts["docs/intro.md"])
+	require.Equal(t, 0, counts["docs/other.md"])
+
+	// missing repo -> empty map, no error
+	empty, err := cache.CommentCounts("nope")
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}

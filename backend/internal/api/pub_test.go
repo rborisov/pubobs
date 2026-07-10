@@ -910,3 +910,22 @@ func TestPubPostComment_deniedWithoutAccess(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
+
+func TestPubListNotes_includesCommentCount(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "u1@x.com", "U1")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\n---\n\n### A | 2026-01-01T00:00:00Z |  | s\n\nx\n")
+
+	req := httptest.NewRequest("GET", "/pub/r1", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"comment_count\":1")
+}

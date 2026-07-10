@@ -137,7 +137,10 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 			Tags           []string `json:"tags"`
 			SyncedAt       string   `json:"synced_at"`
 			SharedPublicly bool     `json:"shared_publicly"`
+			CommentCount   int      `json:"comment_count"`
 		}
+
+		commentCounts, _ := deps.Cache.CommentCounts(repoID)
 
 		items := make([]noteItem, 0, len(notes))
 		for _, n := range notes {
@@ -164,6 +167,7 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 				Tags:           tags,
 				SyncedAt:       syncedAt,
 				SharedPublicly: n.SharedPublicly,
+				CommentCount:   commentCounts[n.Path],
 			})
 		}
 
