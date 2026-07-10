@@ -122,13 +122,19 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const content = document.createElement('div');
   content.className = 'markdown-rendered markdown-preview-view';
 
-  // Share-link-only visitors (empty/guest role) must decrypt client-side via
-  // /render + ?key=. Repo members who open an old share URL while logged in
-  // must NOT take this path — after unshare the URL's key is stale but the
-  // server still decrypts for real repo access and returns html_content.
+  // Prefer server-provided html_content whenever it's present: the backend
+  // only returns it to callers with real repo access (repo member OR a
+  // guest-open repo), and it was decrypted with the note's CURRENT key — so it
+  // works even when the URL's ?key= is stale/mismatched. Only a true
+  // share-link-only visitor (guest-closed repo) gets no html_content; they
+  // decrypt the /render blob client-side with the ?key=. Ordering this the
+  // other way round broke guest-open share links, whose stale key failed the
+  // client decrypt even though usable server HTML was available.
   // (shareLinkOnly is computed above, where the back link uses it too.)
   let htmlContent: string;
-  if (effectiveKey && shareLinkOnly) {
+  if (note.html_content) {
+    htmlContent = note.html_content;
+  } else if (effectiveKey && shareLinkOnly) {
     try {
       const renderURL = `/pub/${repoId}/render/${notePath.split('/').map(encodeURIComponent).join('/')}?key=${encodeURIComponent(effectiveKey)}`;
       htmlContent = await decryptRenderBlob(renderURL, effectiveKey);
@@ -139,8 +145,6 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
         : 'Could not decrypt note content.';
       htmlContent = `<p style="color:#888;font-style:italic">${msg}</p>`;
     }
-  } else if (note.html_content) {
-    htmlContent = note.html_content;
   } else if (note.render_pending || (note.role && note.role !== '')) {
     htmlContent = '<p style="color:#888;font-style:italic">Note content is not yet available. Re-sync this note from Obsidian to refresh it.</p>';
   } else {
