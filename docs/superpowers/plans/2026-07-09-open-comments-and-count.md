@@ -58,13 +58,16 @@ func TestSanitizeCommentName(t *testing.T) {
 
 func TestFormatComment_sanitizesName(t *testing.T) {
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	// A malicious name must not forge extra pipe-fields or start a new "### "
+	// record. FormatComment's own "|" separators are expected; assert on the
+	// PARSED name and comment count instead of the raw formatted string.
 	formatted := FormatComment("evil | name\n### fake", "", "hi", "", ts)
-	if strings.Contains(formatted, "|") {
-		t.Errorf("formatted comment header leaks a pipe: %q", formatted)
-	}
 	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + formatted)
 	if len(got) != 1 {
 		t.Fatalf("expected exactly one parsed comment, got %d: %+v", len(got), got)
+	}
+	if strings.Contains(got[0].AuthorName, "|") {
+		t.Errorf("parsed author name leaks a pipe: %q", got[0].AuthorName)
 	}
 }
 ```

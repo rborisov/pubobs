@@ -94,9 +94,15 @@ whole comment blocks. Add `sanitizeCommentName(string) string` in `gitcache`
 - caps length (e.g. 100 runes).
 
 `FormatComment` (or `AppendComment`) applies it to the name defensively so any
-caller is safe. Bodies remain safe: the web escapes + markdown-renders them
-client-side (`esc` + `renderCommentBody`), and author names are already `esc`'d
-on render.
+caller is safe. **The body and commit-SHA fields need the same defense:**
+because `ParseComments` splits records on the literal `\n### `, a body (or a
+commit-SHA that breaks the header) could otherwise forge a second,
+attacker-attributed comment — a real vector once anonymous callers can write.
+`FormatComment` therefore also neutralizes the `\n### ` record delimiter in the
+body (including a body that begins with `### `, which meets the delimiter at the
+header/body seam) and strips `\r`/`\n`/`|` from the email and commit-SHA header
+fields. Rendered bodies are additionally `esc`'d + markdown-rendered
+client-side.
 
 ### 4. Parent-note wikilink in comments file
 
