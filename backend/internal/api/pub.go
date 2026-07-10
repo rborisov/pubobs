@@ -516,6 +516,72 @@ func decryptNoteRenderHTML(keyB64 string, ciphertext []byte) (string, error) {
 	return string(plaintext), nil
 }
 
+// resolveCommenter decides how to attribute a comment. A caller holding a valid
+// bearer token comments under their account identity (client-supplied name is
+// ignored — no spoofing). Everyone else is anonymous: the sanitized client name,
+// or "anonym" when blank.
+func resolveCommenter(r *http.Request, deps *Deps, clientName string) (name, email string) {
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenStr != "" {
+		if claims, err := auth.VerifyAccessToken(deps.Config.SecretKey, tokenStr); err == nil {
+			if user, uerr := deps.Store.GetUserByID(r.Context(), claims.UserID); uerr == nil && user != nil {
+				return user.Name, user.Email
+			}
+		}
+	}
+	name = gitcache.SanitizeCommentName(clientName)
+	if name == "" {
+		name = "anonym"
+	}
+	return name, ""
+}
+
+func handlePubPostComment(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "repoId")
+		notePath := chi.URLParam(r, "*")
+		if !strings.HasSuffix(notePath, "/comments") {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		notePath = strings.TrimSuffix(notePath, "/comments")
+
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
+		if note == nil || !pubNoteAccess(r, deps, repo, note) {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		var body struct {
+			Body          string `json:"body"`
+			NoteCommitSHA string `json:"note_commit_sha"`
+			AuthorName    string `json:"author_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+			writeError(w, http.StatusBadRequest, "body required")
+			return
+		}
+
+		name, email := resolveCommenter(r, deps, body.AuthorName)
+
+		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "cred decrypt failed")
+			return
+		}
+		if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, notePath, name, email, body.Body, body.NoteCommitSHA); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save comment")
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
 func noteTitle(path string, snap *model.NoteSnapshot) string {
 	if snap != nil && snap.MetadataJSON != "" {
 		var meta struct {

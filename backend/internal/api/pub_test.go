@@ -823,3 +823,57 @@ func TestPubComments_shareLinkVisitorCanReadWithKey(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr2, req2)
 	require.Equal(t, http.StatusNotFound, rr2.Code)
 }
+
+func TestPubPostComment_anonymousUsesDisplayNameThenAnonym(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open -> anonymous can read/write
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	// named anonymous comment
+	body := strings.NewReader(`{"body":"hello","note_commit_sha":"sha1","author_name":"Bob"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	// blank name -> anonym
+	body2 := strings.NewReader(`{"body":"again","note_commit_sha":"sha1","author_name":"  "}`)
+	req2 := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body2)
+	req2.Header.Set("Content-Type", "application/json")
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusCreated, rr2.Code, rr2.Body.String())
+
+	// read back
+	get := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	gr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(gr, get)
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"Bob\"")
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"anonym\"")
+}
+
+func TestPubPostComment_deniedWithoutAccess(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed, note not shared
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	body := strings.NewReader(`{"body":"x","note_commit_sha":"sha1","author_name":"Bob"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
