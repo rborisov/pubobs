@@ -116,6 +116,12 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		// same note always yield the same key here.
 		noteKeys := make(map[string]string, len(payload.Files))
 		for _, f := range payload.Files {
+			// Comment files and _pubobs/ metadata are companion data, not
+			// notes — never create note rows for them (they'd otherwise leak
+			// into the notes list). Same rule as the import path.
+			if isNonNotePath(f.Path) {
+				continue
+			}
 			note, err := deps.Store.UpsertNote(r.Context(), repoID, f.Path)
 			if err != nil {
 				continue

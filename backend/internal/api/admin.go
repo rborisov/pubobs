@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -122,7 +121,7 @@ func importRepoFromGit(ctx context.Context, deps *Deps, repoID, syncedBy string)
 
 	imported := 0
 	for _, f := range files {
-		if strings.HasSuffix(f.Path, "-comments.md") || strings.HasPrefix(f.Path, "_pubobs/") {
+		if isNonNotePath(f.Path) {
 			continue
 		}
 		note, err := deps.Store.UpsertNote(ctx, repoID, f.Path)

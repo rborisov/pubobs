@@ -844,6 +844,33 @@ func TestPubComments_wrongKeyDenied(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
+func TestPubListNotes_excludesCommentAndPubobsFiles(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "u@x.com", "U")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+
+	real, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, real.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	// Simulate rows that leaked in before the isNonNotePath filter existed.
+	cf, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro-comments.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, cf.ID, "x", "{}", "u1", "sha1"))
+	po, err := deps.Store.UpsertNote(ctx, "r1", "_pubobs/obsidian.css")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, po.ID, "x", "{}", "u1", "sha1"))
+
+	req := httptest.NewRequest("GET", "/pub/r1", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "docs/intro.md")
+	require.NotContains(t, rr.Body.String(), "intro-comments.md")
+	require.NotContains(t, rr.Body.String(), "_pubobs/")
+}
+
 func TestPubComments_redactsMemberEmailForNonMembers(t *testing.T) {
 	deps, cacheDir := newTestDepsForPub(t)
 	ctx := context.Background()

@@ -144,6 +144,13 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 
 		items := make([]noteItem, 0, len(notes))
 		for _, n := range notes {
+			// Defensively hide companion files (comment files, _pubobs/) that
+			// leaked into the DB via an ingestion path that predates the
+			// isNonNotePath filter — so stale rows disappear from the list
+			// without needing a re-sync or DB cleanup.
+			if isNonNotePath(n.Path) {
+				continue
+			}
 			snap, _ := deps.Store.GetSnapshot(r.Context(), n.ID)
 			syncedAt := ""
 			var tags []string

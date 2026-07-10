@@ -4,9 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/pubobs/backend/internal/model"
 )
+
+// isNonNotePath reports whether a repo file path is companion data rather than
+// a real note — per-note comment files ("<note>-comments.md") and anything
+// under the "_pubobs/" metadata dir. Such paths must never be ingested as, or
+// listed as, notes. Centralized so every ingestion path (sync, import,
+// heal-from-git) and the list endpoint apply the same rule.
+func isNonNotePath(path string) bool {
+	return strings.HasSuffix(path, "-comments.md") || strings.HasPrefix(path, "_pubobs/")
+}
 
 // reconcileNotesWithGit returns only notes whose paths still exist in the
 // repo's git tree, and deletes orphan DB rows (plus render blobs) for paths
@@ -105,6 +115,9 @@ func readNoteMarkdownFromGit(ctx context.Context, deps *Deps, repo *model.Repo, 
 // existed, so the next open attempt succeeds instead of returning 404 forever.
 func ensureNoteFromGit(ctx context.Context, deps *Deps, repo *model.Repo, notePath, syncedBy string) (*model.Note, error) {
 	if deps.Cache == nil || syncedBy == "" {
+		return nil, nil
+	}
+	if isNonNotePath(notePath) {
 		return nil, nil
 	}
 	content, err := readNoteMarkdownFromGit(ctx, deps, repo, notePath)
