@@ -22,7 +22,28 @@ func CommentsFilePath(notePath string) string {
 }
 
 func commentsFileHeader(notePath string) string {
-	return fmt.Sprintf("---\ntype: comments\nnote: %s\n---\n\n", notePath)
+	link := "[[" + strings.TrimSuffix(notePath, ".md") + "]]"
+	return fmt.Sprintf("---\ntype: comments\nnote: %s\n---\n\nComments on %s\n\n", notePath, link)
+}
+
+// ensureParentLink inserts a "Comments on [[parent]]" line into an existing
+// comments file that predates the wikilink (so Obsidian surfaces the comments
+// file as a backlink on the note). Idempotent: a no-op if the link is already
+// present. The line goes in the preamble, before the first "### " record.
+func ensureParentLink(content, notePath string) string {
+	link := "[[" + strings.TrimSuffix(notePath, ".md") + "]]"
+	if strings.Contains(content, link) {
+		return content
+	}
+	line := "Comments on " + link + "\n\n"
+	if strings.HasPrefix(content, "---\n") {
+		if idx := strings.Index(content[4:], "\n---\n"); idx != -1 {
+			end := 4 + idx + len("\n---\n")
+			rest := strings.TrimLeft(content[end:], "\n")
+			return content[:end] + "\n" + line + rest
+		}
+	}
+	return line + content
 }
 
 // SanitizeCommentName makes a user-supplied display name safe to store in the

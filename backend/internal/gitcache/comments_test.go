@@ -154,3 +154,26 @@ func TestFormatComment_sanitizesName(t *testing.T) {
 		t.Errorf("parsed author name leaks a pipe: %q", got[0].AuthorName)
 	}
 }
+
+func TestCommentsHeader_hasParentWikilink(t *testing.T) {
+	h := commentsFileHeader("docs/intro.md")
+	if !strings.Contains(h, "[[docs/intro]]") {
+		t.Errorf("header missing parent wikilink: %q", h)
+	}
+}
+
+func TestEnsureParentLink_addsWhenMissingIdempotently(t *testing.T) {
+	legacy := "---\ntype: comments\nnote: docs/intro.md\n---\n\n### Alice | 2026-01-01T00:00:00Z | a@x.com | sha\n\nhi\n"
+	once := ensureParentLink(legacy, "docs/intro.md")
+	if !strings.Contains(once, "[[docs/intro]]") {
+		t.Fatalf("expected wikilink added: %q", once)
+	}
+	twice := ensureParentLink(once, "docs/intro.md")
+	if once != twice {
+		t.Errorf("ensureParentLink not idempotent:\n%q\n%q", once, twice)
+	}
+	// must not corrupt existing comment records
+	if got := ParseComments(once); len(got) != 1 {
+		t.Errorf("expected 1 comment preserved, got %d", len(got))
+	}
+}

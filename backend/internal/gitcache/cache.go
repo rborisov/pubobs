@@ -499,7 +499,7 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 	if len(existing) == 0 {
 		content = commentsFileHeader(notePath) + block
 	} else {
-		content = string(existing) + block
+		content = ensureParentLink(string(existing), notePath) + block
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
