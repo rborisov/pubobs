@@ -103,10 +103,10 @@ const LOGO_MARK = `
 
 function renderNav(app: HTMLElement, me: Me): void {
   const nav = document.createElement('nav');
-  nav.style.cssText =
-    'background:#2D3F56;color:#fff;padding:0 20px;height:52px;' +
-    'display:flex;align-items:center;gap:16px;font-family:system-ui,sans-serif;' +
-    'box-shadow:0 1px 3px rgba(0,0,0,0.2)';
+  // Styling lives in index.html's global <style> as .app-nav so a mobile
+  // breakpoint can wrap the bar and hide the long email — inline styles here
+  // couldn't be overridden by a media query without !important.
+  nav.className = 'app-nav';
 
   const linkStyle = 'color:#a8bbd0;text-decoration:none;font-size:0.875rem;transition:color 0.1s';
   const logoHtml = `
@@ -126,7 +126,7 @@ function renderNav(app: HTMLElement, me: Me): void {
       <a href="#/users" style="${linkStyle}">Users</a>
       <a href="#/allowlist" style="${linkStyle}">Allowlist</a>
       <a href="#/storage" style="${linkStyle}">Storage</a>
-      <span style="flex:1"></span>
+      <span class="app-nav-spacer" style="flex:1"></span>
       <button id="signout-btn"
         style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;
                border-radius:4px;transition:background 0.1s">
@@ -140,8 +140,8 @@ function renderNav(app: HTMLElement, me: Me): void {
       <a href="#/repos" style="${linkStyle}">Repos</a>
       <a href="#/groups" style="${linkStyle}">Groups</a>
       <a href="#/users" style="${linkStyle}">Users</a>
-      <span style="flex:1"></span>
-      <span style="color:#8094AF;font-size:0.8rem">${esc(me.email)}</span>
+      <span class="app-nav-spacer" style="flex:1"></span>
+      <span class="app-nav-email" style="color:#8094AF;font-size:0.8rem">${esc(me.email)}</span>
       <button id="signout-btn"
         style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;
                border-radius:4px">
@@ -153,8 +153,8 @@ function renderNav(app: HTMLElement, me: Me): void {
       ${logoHtml}
       <div style="width:1px;height:20px;background:#3d5470;margin:0 4px"></div>
       <a href="#/dashboard" style="${linkStyle}">My repos</a>
-      <span style="flex:1"></span>
-      <span style="color:#8094AF;font-size:0.8rem">${esc(me.email)}</span>
+      <span class="app-nav-spacer" style="flex:1"></span>
+      <span class="app-nav-email" style="color:#8094AF;font-size:0.8rem">${esc(me.email)}</span>
       <button id="signout-btn"
         style="background:none;border:none;color:#a8bbd0;cursor:pointer;font-size:0.875rem;padding:6px 10px;
                border-radius:4px">

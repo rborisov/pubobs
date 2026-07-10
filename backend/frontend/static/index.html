@@ -19,6 +19,19 @@
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
     th { font-weight: 600; color: #475569; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    /* App navigation bar. Class-based (not inline in main.ts) so this mobile
+       breakpoint can restyle it: on phones the fixed-height single row with a
+       long email overflowed the viewport and pushed the whole page sideways.
+       Below 640px the bar wraps and the email is hidden. */
+    .app-nav {
+      background: var(--brand-dark); color: #fff; padding: 0 20px; height: 52px;
+      display: flex; align-items: center; gap: 16px;
+      font-family: system-ui, sans-serif; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    @media (max-width: 640px) {
+      .app-nav { height: auto; flex-wrap: wrap; padding: 8px 14px; gap: 8px 12px; }
+      .app-nav-email, .app-nav-spacer { display: none; }
+    }
   </style>
 </head>
 <body>
