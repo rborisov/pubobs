@@ -46,6 +46,13 @@ exact check that authorizes reading the note itself:
 This replaces the `pubRepoAccess`-only gate on the read dispatcher and is the
 gate for the new write endpoint.
 
+**Email privacy:** comment authors are attributed by account identity when
+logged in (kept simple — no repo-role gate on identity). But a non-member
+viewer (no repo role — anonymous guest-open or share-link visitor) must not see
+members' full email addresses: `handlePubComments` exposes only the local part
+(before `@`) of `author_email` to non-members, while real members still receive
+the full address.
+
 ## Backend changes
 
 ### 1. Read comments — accept note-scoped access
@@ -94,9 +101,15 @@ whole comment blocks. Add `sanitizeCommentName(string) string` in `gitcache`
 - caps length (e.g. 100 runes).
 
 `FormatComment` (or `AppendComment`) applies it to the name defensively so any
-caller is safe. Bodies remain safe: the web escapes + markdown-renders them
-client-side (`esc` + `renderCommentBody`), and author names are already `esc`'d
-on render.
+caller is safe. **The body and commit-SHA fields need the same defense:**
+because `ParseComments` splits records on the literal `\n### `, a body (or a
+commit-SHA that breaks the header) could otherwise forge a second,
+attacker-attributed comment — a real vector once anonymous callers can write.
+`FormatComment` therefore also neutralizes the `\n### ` record delimiter in the
+body (including a body that begins with `### `, which meets the delimiter at the
+header/body seam) and strips `\r`/`\n`/`|` from the email and commit-SHA header
+fields. Rendered bodies are additionally `esc`'d + markdown-rendered
+client-side.
 
 ### 4. Parent-note wikilink in comments file
 

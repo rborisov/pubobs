@@ -1,5 +1,5 @@
 import {
-  pubGetNote, pubListComments, addComment, mintShareLink, revokeShareLink,
+  pubGetNote, pubListComments, pubAddComment, mintShareLink, revokeShareLink,
   type PubNoteDetail, type PubComment, type ShareMode,
 } from '../api';
 import { isAuthenticated } from '../auth';
@@ -175,10 +175,10 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   }
 
   // Comments — load async, render after page is already shown
-  const commentsSection = buildCommentsSection(repoId, notePath, note);
+  const commentsSection = buildCommentsSection(repoId, notePath, note, effectiveKey);
   wrap.appendChild(commentsSection);
   const commentsList = commentsSection.querySelector(`#comments-list-${note.id}`) as HTMLElement;
-  loadComments(repoId, notePath, commentsList);
+  loadComments(repoId, notePath, commentsList, effectiveKey);
 
   return wrap;
 }
@@ -284,7 +284,7 @@ function buildShareControl(repoId: string, notePath: string, note: PubNoteDetail
   return wrap;
 }
 
-function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDetail): HTMLElement {
+function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDetail, key?: string): HTMLElement {
   const section = document.createElement('section');
   section.style.cssText = 'margin-top:48px;padding-top:24px;border-top:1px solid var(--r-border)';
 
@@ -301,60 +301,65 @@ function buildCommentsSection(repoId: string, notePath: string, note: PubNoteDet
   list.appendChild(loadingRow('Loading comments…', 14));
   section.appendChild(list);
 
-  // Post form (authenticated) or sign-in prompt
   const formWrap = document.createElement('div');
   formWrap.style.marginTop = '20px';
-  if (isAuthenticated()) {
-    const ta = document.createElement('textarea');
-    ta.placeholder = 'Write a comment…';
-    ta.className = 'r-form-input';
-    formWrap.appendChild(ta);
 
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px';
-
-    const btn = document.createElement('button');
-    btn.textContent = 'Post comment';
-    btn.className = 'r-btn-primary';
-    row.appendChild(btn);
-
-    const err = document.createElement('span');
-    err.className = 'r-error';
-    err.style.fontSize = '0.8rem';
-    row.appendChild(err);
-    formWrap.appendChild(row);
-
-    btn.addEventListener('click', async () => {
-      const body = ta.value.trim();
-      if (!body) return;
-      btn.disabled = true;
-      err.textContent = '';
-      try {
-        await addComment(repoId, notePath, body, note.git_commit_sha ?? '');
-        ta.value = '';
-        await loadComments(repoId, notePath, list);
-      } catch (e: unknown) {
-        err.textContent = e instanceof Error ? e.message : String(e);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  } else {
-    const p = document.createElement('p');
-    p.className = 'r-muted';
-    p.style.fontSize = '0.875rem';
-    p.innerHTML = `<a href="#/login" class="r-link">Sign in</a> to leave a comment.`;
-    formWrap.appendChild(p);
+  const anonymous = !isAuthenticated();
+  let nameInput: HTMLInputElement | null = null;
+  if (anonymous) {
+    nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = 'anonym';
+    nameInput.placeholder = 'Your name';
+    nameInput.className = 'r-form-input';
+    nameInput.style.cssText = 'min-height:auto;margin-bottom:8px';
+    formWrap.appendChild(nameInput);
   }
-  section.appendChild(formWrap);
 
+  const ta = document.createElement('textarea');
+  ta.placeholder = 'Write a comment…';
+  ta.className = 'r-form-input';
+  formWrap.appendChild(ta);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px';
+
+  const btn = document.createElement('button');
+  btn.textContent = 'Post comment';
+  btn.className = 'r-btn-primary';
+  row.appendChild(btn);
+
+  const err = document.createElement('span');
+  err.className = 'r-error';
+  err.style.fontSize = '0.8rem';
+  row.appendChild(err);
+  formWrap.appendChild(row);
+
+  btn.addEventListener('click', async () => {
+    const body = ta.value.trim();
+    if (!body) return;
+    btn.disabled = true;
+    err.textContent = '';
+    try {
+      const authorName = anonymous ? (nameInput!.value.trim() || 'anonym') : undefined;
+      await pubAddComment(repoId, notePath, body, note.git_commit_sha ?? '', { authorName, key });
+      ta.value = '';
+      await loadComments(repoId, notePath, list, key);
+    } catch (e: unknown) {
+      err.textContent = e instanceof Error ? e.message : String(e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  section.appendChild(formWrap);
   return section;
 }
 
-async function loadComments(repoId: string, notePath: string, list: HTMLElement): Promise<void> {
+async function loadComments(repoId: string, notePath: string, list: HTMLElement, key?: string): Promise<void> {
   let comments: PubComment[];
   try {
-    comments = await pubListComments(repoId, notePath);
+    comments = await pubListComments(repoId, notePath, key);
   } catch {
     list.textContent = 'Could not load comments.';
     list.className = 'r-error';

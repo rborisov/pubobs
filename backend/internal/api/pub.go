@@ -137,7 +137,10 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 			Tags           []string `json:"tags"`
 			SyncedAt       string   `json:"synced_at"`
 			SharedPublicly bool     `json:"shared_publicly"`
+			CommentCount   int      `json:"comment_count"`
 		}
+
+		commentCounts, _ := deps.Cache.CommentCounts(repoID)
 
 		items := make([]noteItem, 0, len(notes))
 		for _, n := range notes {
@@ -164,6 +167,7 @@ func handlePubListNotes(deps *Deps) http.HandlerFunc {
 				Tags:           tags,
 				SyncedAt:       syncedAt,
 				SharedPublicly: n.SharedPublicly,
+				CommentCount:   commentCounts[n.Path],
 			})
 		}
 
@@ -193,14 +197,15 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 
 		if strings.HasSuffix(notePath, "/comments") {
-			// Comments stay gated on plain repo-level access, unchanged — a
-			// share-link-only visitor never sees comments/backlinks, per
-			// project decision. Do NOT switch this to pubNoteAccess.
-			if pubRepoAccess(r, deps, repoID) == nil {
-				writeError(w, http.StatusNotFound, "repo not found")
+			// Comment read now follows note-read access (pubNoteAccess): repo
+			// members, guest-open visitors, AND share-link visitors with a
+			// valid ?key= can read comments — see the open-comments design.
+			notePath = strings.TrimSuffix(notePath, "/comments")
+			note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
+			if note == nil || !pubNoteAccess(r, deps, repo, note) {
+				writeError(w, http.StatusNotFound, "not found")
 				return
 			}
-			notePath = strings.TrimSuffix(notePath, "/comments")
 			handlePubComments(w, r, deps, repoID, notePath)
 			return
 		}
@@ -245,11 +250,13 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 		// Backlinks are repo-scoped metadata (paths + titles of OTHER notes)
 		// and must never reach a share-link-only visitor, who is authorized
-		// for just this one shared note via its ?key=. Leaking them would let
-		// such a visitor enumerate other notes in a guest-closed repo — the
-		// same reason comments are gated above, and the "cannot enumerate
-		// notes" invariant in the design doc. Guest-open repos and real repo
-		// members both have hasRepoAccess, so they keep backlinks unchanged.
+		// for just this one shared note via its ?key=. Unlike per-note
+		// comments (gated by pubNoteAccess, which a share-link visitor
+		// satisfies), backlinks are deliberately held to the stricter
+		// repo-level gate below because they expose OTHER notes' paths and
+		// would let such a visitor enumerate a guest-closed repo. Guest-open
+		// repos and real repo members both have hasRepoAccess, so they keep
+		// backlinks unchanged.
 		bl := make([]backlinkItem, 0)
 		if hasRepoAccess {
 			backlinks, _ := deps.Store.GetBacklinks(r.Context(), repoID, notePath)
@@ -365,6 +372,16 @@ func resolveNoteHTML(ctx context.Context, deps *Deps, repo *model.Repo, notePath
 	return noteHTMLResult{}
 }
 
+// emailLocalPart returns the portion of an email address before "@", so a
+// non-member viewer never sees a member's full address/domain. Empty or
+// non-email values pass through unchanged.
+func emailLocalPart(email string) string {
+	if i := strings.Index(email, "@"); i >= 0 {
+		return email[:i]
+	}
+	return email
+}
+
 func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoID, notePath string) {
 	raw, err := deps.Cache.ReadRawFile(repoID, gitcache.CommentsFilePath(notePath))
 	if err != nil {
@@ -386,13 +403,21 @@ func handlePubComments(w http.ResponseWriter, r *http.Request, deps *Deps, repoI
 		Body        string `json:"body"`
 		IsOutdated  bool   `json:"is_outdated"`
 	}
+	// Non-members (anonymous guest-open or share-link visitors — no repo role)
+	// must not see members' full email addresses. Expose only the local part
+	// (before "@") to them; real members still get the full address.
+	isMember := callerRepoRole(r, deps, repoID) != ""
 	parsed := gitcache.ParseComments(raw)
 	out := make([]item, 0, len(parsed))
 	for _, c := range parsed {
 		isOutdated := c.NoteCommitSHA != "" && currentSHA != "" && c.NoteCommitSHA != currentSHA
+		email := c.AuthorEmail
+		if !isMember {
+			email = emailLocalPart(email)
+		}
 		out = append(out, item{
 			AuthorName:  c.AuthorName,
-			AuthorEmail: c.AuthorEmail,
+			AuthorEmail: email,
 			CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			Body:        c.Body,
 			IsOutdated:  isOutdated,
@@ -513,6 +538,73 @@ func decryptNoteRenderHTML(keyB64 string, ciphertext []byte) (string, error) {
 		return "", fmt.Errorf("decrypt: %w", err)
 	}
 	return string(plaintext), nil
+}
+
+// resolveCommenter decides how to attribute a comment. A caller holding a valid
+// bearer token comments under their account identity (client-supplied name is
+// ignored — no spoofing). Everyone else is anonymous: the sanitized client name,
+// or "anonym" when blank.
+func resolveCommenter(r *http.Request, deps *Deps, clientName string) (name, email string) {
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenStr != "" {
+		if claims, err := auth.VerifyAccessToken(deps.Config.SecretKey, tokenStr); err == nil {
+			if user, uerr := deps.Store.GetUserByID(r.Context(), claims.UserID); uerr == nil && user != nil {
+				return user.Name, user.Email
+			}
+		}
+	}
+	name = gitcache.SanitizeCommentName(clientName)
+	if name == "" {
+		name = "anonym"
+	}
+	return name, ""
+}
+
+func handlePubPostComment(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "repoId")
+		notePath := chi.URLParam(r, "*")
+		if !strings.HasSuffix(notePath, "/comments") {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		notePath = strings.TrimSuffix(notePath, "/comments")
+
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
+		if note == nil || !pubNoteAccess(r, deps, repo, note) {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		var body struct {
+			Body          string `json:"body"`
+			NoteCommitSHA string `json:"note_commit_sha"`
+			AuthorName    string `json:"author_name"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+			writeError(w, http.StatusBadRequest, "body required")
+			return
+		}
+
+		name, email := resolveCommenter(r, deps, body.AuthorName)
+
+		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "cred decrypt failed")
+			return
+		}
+		if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, notePath, name, email, body.Body, body.NoteCommitSHA); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save comment")
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}
 }
 
 func noteTitle(path string, snap *model.NoteSnapshot) string {

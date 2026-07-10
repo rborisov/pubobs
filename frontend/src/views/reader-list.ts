@@ -402,6 +402,14 @@ function renderNoteList(
         ? new Date(note.synced_at).toLocaleDateString() : '';
       right.appendChild(dateSpan);
 
+      if (note.comment_count > 0) {
+        const commentBadge = document.createElement('span');
+        commentBadge.style.cssText = 'color:var(--r-text-faint);font-size:0.75rem;white-space:nowrap';
+        commentBadge.textContent = `💬 ${note.comment_count}`;
+        commentBadge.title = `${note.comment_count} comment${note.comment_count !== 1 ? 's' : ''}`;
+        right.appendChild(commentBadge);
+      }
+
       if (canManageSharing) {
         right.appendChild(buildRowShareActions(repoId, note));
       }

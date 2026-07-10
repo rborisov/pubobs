@@ -130,6 +130,7 @@ func BuildRouter(deps *Deps) http.Handler {
 	// Public reader (no auth)
 	r.Get("/pub/{repoId}", handlePubListNotes(deps))
 	r.Get("/pub/{repoId}/notes/*", handlePubGetNote(deps))
+	r.Post("/pub/{repoId}/notes/*", handlePubPostComment(deps))
 	r.Get("/pub/{repoId}/assets/*", handlePubGetAsset(deps))
 	r.Get("/pub/{repoId}/render/*", handlePubGetRender(deps))
 

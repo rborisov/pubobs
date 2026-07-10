@@ -788,3 +788,194 @@ func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("from-git-checkout"), backfilled)
 }
+
+func writeCommentsFile(t *testing.T, cacheDir, repoID, notePath, contents string) {
+	t.Helper()
+	p := filepath.Join(cacheDir, repoID, gitcache.CommentsFilePath(notePath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	require.NoError(t, os.WriteFile(p, []byte(contents), 0o644))
+}
+
+func TestPubComments_shareLinkVisitorCanReadWithKey(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Al | 2026-01-01T00:00:00Z |  | sha1\n\nhi\n")
+
+	// with key -> 200
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments?key="+key, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"author_name\":\"Al\"")
+
+	// without key on a guest-closed repo -> 404
+	req2 := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusNotFound, rr2.Code)
+}
+
+func TestPubComments_wrongKeyDenied(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Al | 2026-01-01T00:00:00Z |  | sha1\n\nhi\n")
+
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments?key=WRONG-KEY-VALUE", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestPubComments_redactsMemberEmailForNonMembers(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open: anonymous is a non-member
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Alice | 2026-01-01T00:00:00Z | alice@company.com | sha1\n\nhi\n")
+
+	// Non-member (anonymous, guest-open) sees only the local part, never the domain.
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"author_email\":\"alice\"")
+	require.NotContains(t, rr.Body.String(), "alice@company.com")
+
+	// A real member (bearer token, reader role) still gets the full address.
+	req2 := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	req2.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusOK, rr2.Code, rr2.Body.String())
+	require.Contains(t, rr2.Body.String(), "alice@company.com")
+}
+
+func TestPubPostComment_anonymousUsesDisplayNameThenAnonym(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open -> anonymous can read/write
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	// named anonymous comment
+	body := strings.NewReader(`{"body":"hello","note_commit_sha":"sha1","author_name":"Bob"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	// blank name -> anonym
+	body2 := strings.NewReader(`{"body":"again","note_commit_sha":"sha1","author_name":"  "}`)
+	req2 := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body2)
+	req2.Header.Set("Content-Type", "application/json")
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusCreated, rr2.Code, rr2.Body.String())
+
+	// read back
+	get := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	gr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(gr, get)
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"Bob\"")
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"anonym\"")
+}
+
+// TestPubPostComment_authenticatedUsesAccountIdentityNotClientName verifies
+// that when a valid bearer token is presented, the endpoint attributes the
+// comment to the caller's real account identity (display name), ignoring
+// any client-supplied author_name — a spoofed name must never be stored.
+func TestPubPostComment_authenticatedUsesAccountIdentityNotClientName(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	body := strings.NewReader(`{"body":"hello","note_commit_sha":"sha1","author_name":"Spoofed"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	get := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	gr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(gr, get)
+	require.Equal(t, http.StatusOK, gr.Code, gr.Body.String())
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"Reader\"")
+	require.NotContains(t, gr.Body.String(), "Spoofed")
+}
+
+func TestPubPostComment_deniedWithoutAccess(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed, note not shared
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	body := strings.NewReader(`{"body":"x","note_commit_sha":"sha1","author_name":"Bob"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestPubListNotes_includesCommentCount(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "u1@x.com", "U1")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\n---\n\n### A | 2026-01-01T00:00:00Z |  | s\n\nx\n")
+
+	req := httptest.NewRequest("GET", "/pub/r1", nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"comment_count\":1")
+}

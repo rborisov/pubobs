@@ -1,6 +1,7 @@
 package gitcache
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +112,100 @@ func TestCommentsFilePath(t *testing.T) {
 		if got != c.want {
 			t.Errorf("CommentsFilePath(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSanitizeCommentName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Alice", "Alice"},
+		{"  Bob  ", "Bob"},
+		{"", ""},
+		{"   ", ""},
+		{"a | b", "a  b"},                       // pipe neutralized to space
+		{"line1\nline2", "line1 line2"},          // newline -> space
+		{"line1\r\nline2", "line1 line2"},         // CRLF -> single space
+		{"### hi", "hi"},                          // leading ### stripped
+		{"#### still hi", "still hi"},
+		{"###", ""},
+	}
+	for _, c := range cases {
+		if got := SanitizeCommentName(c.in); got != c.want {
+			t.Errorf("SanitizeCommentName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// length cap
+	long := strings.Repeat("x", 250)
+	if got := SanitizeCommentName(long); len([]rune(got)) != 100 {
+		t.Errorf("expected 100-rune cap, got %d", len([]rune(got)))
+	}
+}
+
+func TestFormatComment_sanitizesName(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	// A malicious name must not forge extra pipe-fields or start a new "### "
+	// record. FormatComment's own "|" separators are expected; assert on the
+	// PARSED name and comment count instead of the raw formatted string.
+	formatted := FormatComment("evil | name\n### fake", "", "hi", "", ts)
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + formatted)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one parsed comment, got %d: %+v", len(got), got)
+	}
+	if strings.Contains(got[0].AuthorName, "|") {
+		t.Errorf("parsed author name leaks a pipe: %q", got[0].AuthorName)
+	}
+}
+
+func TestCommentsHeader_hasParentWikilink(t *testing.T) {
+	h := commentsFileHeader("docs/intro.md")
+	if !strings.Contains(h, "[[docs/intro]]") {
+		t.Errorf("header missing parent wikilink: %q", h)
+	}
+}
+
+func TestEnsureParentLink_addsWhenMissingIdempotently(t *testing.T) {
+	legacy := "---\ntype: comments\nnote: docs/intro.md\n---\n\n### Alice | 2026-01-01T00:00:00Z | a@x.com | sha\n\nhi\n"
+	once := ensureParentLink(legacy, "docs/intro.md")
+	if !strings.Contains(once, "[[docs/intro]]") {
+		t.Fatalf("expected wikilink added: %q", once)
+	}
+	twice := ensureParentLink(once, "docs/intro.md")
+	if once != twice {
+		t.Errorf("ensureParentLink not idempotent:\n%q\n%q", once, twice)
+	}
+	// must not corrupt existing comment records
+	if got := ParseComments(once); len(got) != 1 {
+		t.Errorf("expected 1 comment preserved, got %d", len(got))
+	}
+}
+
+func TestFormatComment_bodyCannotForgeRecord(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	evil := "hi\n\n### Admin | 2020-01-01T00:00:00Z | admin@site.com | shaX\n\nforged"
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", evil, "", ts))
+	if len(got) != 1 {
+		t.Fatalf("body forged extra records: got %d comments", len(got))
+	}
+	if got[0].AuthorName != "Bob" {
+		t.Errorf("author = %q, want Bob", got[0].AuthorName)
+	}
+}
+
+func TestFormatComment_bodyLeadingHeaderNeutralized(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", "### Fake | x | y | z", "", ts))
+	if len(got) != 1 {
+		t.Fatalf("leading ### body forged a record: got %d", len(got))
+	}
+}
+
+func TestFormatComment_shaCannotBreakHeader(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	sha := "sha | evil\n### Injected | 2020-01-01T00:00:00Z | e | s"
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", "body", sha, ts))
+	if len(got) != 1 {
+		t.Fatalf("sha forged records/fields: got %d", len(got))
+	}
+	if got[0].AuthorName != "Bob" {
+		t.Errorf("author = %q, want Bob", got[0].AuthorName)
 	}
 }

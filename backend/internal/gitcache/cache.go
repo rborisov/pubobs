@@ -473,6 +473,44 @@ func (c *Cache) HeadSHA(repoID string) (string, error) {
 	return c.git.RevParseHEAD(c.repoDir(repoID))
 }
 
+// CommentCounts walks the repo's local clone for "*-comments.md" files and
+// returns a map of note path (".md") -> number of comments. Only files that
+// exist are read, so cost scales with the number of commented notes. Returns
+// an empty map (no error) when the repo isn't cloned locally yet.
+func (c *Cache) CommentCounts(repoID string) (map[string]int, error) {
+	counts := map[string]int{}
+	root := c.repoDir(repoID)
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return counts, nil
+	}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "-comments.md") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		notePath := strings.TrimSuffix(filepath.ToSlash(rel), "-comments.md") + ".md"
+		counts[notePath] = len(ParseComments(string(data)))
+		return nil
+	})
+	return counts, err
+}
+
 // AppendComment appends a comment to the note's companion comments file,
 // commits the change, and pushes to the remote.
 // noteCommitSHA is the git_commit_sha of the note at the time of posting.
@@ -499,7 +537,7 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 	if len(existing) == 0 {
 		content = commentsFileHeader(notePath) + block
 	} else {
-		content = string(existing) + block
+		content = ensureParentLink(string(existing), notePath) + block
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
