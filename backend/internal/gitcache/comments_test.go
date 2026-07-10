@@ -101,6 +101,53 @@ func TestFormatComment_roundtrip_withSHA(t *testing.T) {
 	}
 }
 
+func TestFormatComment_readableHeadingWithMetadataOnNextLine(t *testing.T) {
+	ts := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	formatted := FormatComment("Roman Borisov", "roman@x.com", "Nice note!", "deadbeef", ts)
+	lines := strings.Split(formatted, "\n")
+	// First line is a readable author heading — NOT the pipe-delimited metadata.
+	if lines[0] != "### Roman Borisov" {
+		t.Errorf("heading line = %q, want %q", lines[0], "### Roman Borisov")
+	}
+	if strings.Contains(lines[0], "|") {
+		t.Errorf("heading must not contain pipe metadata: %q", lines[0])
+	}
+	// Machine metadata (timestamp | email | sha) lives on the next line.
+	if lines[1] != "2026-05-04T10:00:00Z | roman@x.com | deadbeef" {
+		t.Errorf("metadata line = %q", lines[1])
+	}
+	// Round-trips through the parser.
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + formatted)
+	if len(got) != 1 {
+		t.Fatalf("expected 1, got %d", len(got))
+	}
+	c := got[0]
+	if c.AuthorName != "Roman Borisov" || c.AuthorEmail != "roman@x.com" ||
+		c.NoteCommitSHA != "deadbeef" || c.Body != "Nice note!" {
+		t.Errorf("round-trip mismatch: %+v", c)
+	}
+	if !c.CreatedAt.Equal(ts) {
+		t.Errorf("ts mismatch: got %v", c.CreatedAt)
+	}
+}
+
+func TestFormatComment_newFormatTwoComments(t *testing.T) {
+	ts := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	content := "---\ntype: comments\nnote: foo.md\n---\n\n" +
+		FormatComment("Alice", "a@x.com", "First", "sha1", ts) +
+		FormatComment("Bob", "b@x.com", "Second", "sha2", ts)
+	got := ParseComments(content)
+	if len(got) != 2 {
+		t.Fatalf("expected 2, got %d", len(got))
+	}
+	if got[0].AuthorName != "Alice" || got[0].Body != "First" || got[0].NoteCommitSHA != "sha1" {
+		t.Errorf("first: %+v", got[0])
+	}
+	if got[1].AuthorName != "Bob" || got[1].Body != "Second" || got[1].NoteCommitSHA != "sha2" {
+		t.Errorf("second: %+v", got[1])
+	}
+}
+
 func TestCommentsFilePath(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"note.md", "note-comments.md"},

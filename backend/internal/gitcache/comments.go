@@ -85,18 +85,29 @@ func neutralizeCommentDelimiter(s string) string {
 
 // FormatComment formats a single comment block for appending to a comments file.
 // noteCommitSHA is the git_commit_sha of the note at the time of posting.
+//
+// Layout (read comfortably in Obsidian): the "### <name>" line is a
+// human-readable per-comment heading; the machine metadata
+// "<RFC3339> | <email> | <sha>" sits on the NEXT line so it isn't rendered as
+// a big pipe-delimited heading. "### " remains the record delimiter (and the
+// anti-forgery boundary). ParseComments still reads the older single-line
+// "### name | ts | email | sha" layout too.
 func FormatComment(name, email, body, noteCommitSHA string, ts time.Time) string {
 	name = SanitizeCommentName(name)
 	email = sanitizeHeaderField(email)
 	noteCommitSHA = sanitizeHeaderField(noteCommitSHA)
 	body = neutralizeCommentDelimiter(strings.TrimSpace(body))
-	return fmt.Sprintf("### %s | %s | %s | %s\n\n%s\n",
+	return fmt.Sprintf("### %s\n%s | %s | %s\n\n%s\n",
 		name, ts.UTC().Format(time.RFC3339), email, noteCommitSHA, body)
 }
 
-// ParseComments parses the contents of a comments markdown file into structured comments.
-// The 4th header field (note commit SHA) is optional — legacy comments without it
-// have NoteCommitSHA == "".
+// ParseComments parses the contents of a comments markdown file into structured
+// comments. It reads both layouts (see FormatComment):
+//   - current: "### <name>" then a "<RFC3339> | <email> | <sha>" metadata line
+//   - legacy:  "### <name> | <RFC3339> | <email> | <sha>" all on one line
+//
+// The note-commit-SHA field is optional in both — comments written before SHA
+// tracking have NoteCommitSHA == "".
 func ParseComments(content string) []ParsedComment {
 	parts := strings.Split(content, "\n### ")
 	start := 1
@@ -111,25 +122,52 @@ func ParseComments(content string) []ParsedComment {
 			continue
 		}
 		header := strings.TrimSpace(part[:nl])
-		body := strings.TrimSpace(part[nl+1:])
+		rest := part[nl+1:]
 
-		fields := strings.SplitN(header, " | ", 4)
-		if len(fields) < 3 {
+		// Legacy single-line layout: "name | RFC3339 | email | sha" on the
+		// heading line (detected by a valid RFC3339 in the 2nd pipe field).
+		if f := strings.SplitN(header, " | ", 4); len(f) >= 3 {
+			if ts, err := time.Parse(time.RFC3339, strings.TrimSpace(f[1])); err == nil {
+				sha := ""
+				if len(f) == 4 {
+					sha = strings.TrimSpace(f[3])
+				}
+				out = append(out, ParsedComment{
+					AuthorName:    strings.TrimSpace(f[0]),
+					AuthorEmail:   strings.TrimSpace(f[2]),
+					CreatedAt:     ts,
+					Body:          strings.TrimSpace(rest),
+					NoteCommitSHA: sha,
+				})
+				continue
+			}
+		}
+
+		// Current layout: heading is the author name; the next line carries
+		// "RFC3339 | email | sha".
+		metaLine := rest
+		body := ""
+		if mnl := strings.Index(rest, "\n"); mnl != -1 {
+			metaLine = rest[:mnl]
+			body = rest[mnl+1:]
+		}
+		mf := strings.SplitN(strings.TrimSpace(metaLine), " | ", 3)
+		if len(mf) < 2 {
 			continue
 		}
-		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(fields[1]))
+		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(mf[0]))
 		if err != nil {
 			continue
 		}
-		var sha string
-		if len(fields) == 4 {
-			sha = strings.TrimSpace(fields[3])
+		sha := ""
+		if len(mf) == 3 {
+			sha = strings.TrimSpace(mf[2])
 		}
 		out = append(out, ParsedComment{
-			AuthorName:    strings.TrimSpace(fields[0]),
-			AuthorEmail:   strings.TrimSpace(fields[2]),
+			AuthorName:    header,
+			AuthorEmail:   strings.TrimSpace(mf[1]),
 			CreatedAt:     ts,
-			Body:          body,
+			Body:          strings.TrimSpace(body),
 			NoteCommitSHA: sha,
 		})
 	}
