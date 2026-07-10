@@ -193,14 +193,15 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 		}
 
 		if strings.HasSuffix(notePath, "/comments") {
-			// Comments stay gated on plain repo-level access, unchanged — a
-			// share-link-only visitor never sees comments/backlinks, per
-			// project decision. Do NOT switch this to pubNoteAccess.
-			if pubRepoAccess(r, deps, repoID) == nil {
-				writeError(w, http.StatusNotFound, "repo not found")
+			// Comment read now follows note-read access (pubNoteAccess): repo
+			// members, guest-open visitors, AND share-link visitors with a
+			// valid ?key= can read comments — see the open-comments design.
+			notePath = strings.TrimSuffix(notePath, "/comments")
+			note, _ := deps.Store.GetNote(r.Context(), repoID, notePath)
+			if note == nil || !pubNoteAccess(r, deps, repo, note) {
+				writeError(w, http.StatusNotFound, "not found")
 				return
 			}
-			notePath = strings.TrimSuffix(notePath, "/comments")
 			handlePubComments(w, r, deps, repoID, notePath)
 			return
 		}

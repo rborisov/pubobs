@@ -788,3 +788,38 @@ func TestHandlePubGetAsset_fallsBackToGitCheckoutAndBackfills(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("from-git-checkout"), backfilled)
 }
+
+func writeCommentsFile(t *testing.T, cacheDir, repoID, notePath, contents string) {
+	t.Helper()
+	p := filepath.Join(cacheDir, repoID, gitcache.CommentsFilePath(notePath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	require.NoError(t, os.WriteFile(p, []byte(contents), 0o644))
+}
+
+func TestPubComments_shareLinkVisitorCanReadWithKey(t *testing.T) {
+	deps, cacheDir := newTestDepsForPub(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x.com/r1.git", "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", false)) // guest-closed
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+	key := "test-note-key-0123456789AB"
+	require.NoError(t, deps.Store.SetNoteShared(ctx, note.ID, true, key))
+	writeCommentsFile(t, cacheDir, "r1", "docs/intro.md",
+		"---\ntype: comments\nnote: docs/intro.md\n---\n\n### Al | 2026-01-01T00:00:00Z |  | sha1\n\nhi\n")
+
+	// with key -> 200
+	req := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments?key="+key, nil)
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "\"author_name\":\"Al\"")
+
+	// without key on a guest-closed repo -> 404
+	req2 := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	rr2 := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusNotFound, rr2.Code)
+}
