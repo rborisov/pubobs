@@ -860,6 +860,39 @@ func TestPubPostComment_anonymousUsesDisplayNameThenAnonym(t *testing.T) {
 	require.Contains(t, gr.Body.String(), "\"author_name\":\"anonym\"")
 }
 
+// TestPubPostComment_authenticatedUsesAccountIdentityNotClientName verifies
+// that when a valid bearer token is presented, the endpoint attributes the
+// comment to the caller's real account identity (display name), ignoring
+// any client-supplied author_name — a spoofed name must never be stored.
+func TestPubPostComment_authenticatedUsesAccountIdentityNotClientName(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true)) // guest-open
+	require.NoError(t, deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "reader"))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	body := strings.NewReader(`{"body":"hello","note_commit_sha":"sha1","author_name":"Spoofed"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "reader@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	get := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	gr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(gr, get)
+	require.Equal(t, http.StatusOK, gr.Code, gr.Body.String())
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"Reader\"")
+	require.NotContains(t, gr.Body.String(), "Spoofed")
+}
+
 func TestPubPostComment_deniedWithoutAccess(t *testing.T) {
 	deps, _ := newTestDepsForPub(t)
 	ctx := context.Background()

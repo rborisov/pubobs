@@ -63,12 +63,35 @@ func SanitizeCommentName(name string) string {
 	return name
 }
 
+// sanitizeHeaderField strips characters that would break the single-line,
+// pipe-delimited "### a | b | c | d" comment header: line breaks and the "|"
+// field separator. Used for machine fields (email, commit SHA).
+func sanitizeHeaderField(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ", "|", " ").Replace(s)
+}
+
+// neutralizeCommentDelimiter stops stored content from forging a new comment
+// record: ParseComments splits records on "\n### ", so any such sequence (or a
+// body that begins with "### ", which meets the delimiter at the header/body
+// seam) would be parsed back as a separate, independently-attributed comment.
+// A zero-width space defeats the split while leaving the text visually intact.
+func neutralizeCommentDelimiter(s string) string {
+	s = strings.ReplaceAll(s, "\n### ", "\n​### ")
+	if strings.HasPrefix(s, "### ") {
+		s = "​" + s
+	}
+	return s
+}
+
 // FormatComment formats a single comment block for appending to a comments file.
 // noteCommitSHA is the git_commit_sha of the note at the time of posting.
 func FormatComment(name, email, body, noteCommitSHA string, ts time.Time) string {
 	name = SanitizeCommentName(name)
+	email = sanitizeHeaderField(email)
+	noteCommitSHA = sanitizeHeaderField(noteCommitSHA)
+	body = neutralizeCommentDelimiter(strings.TrimSpace(body))
 	return fmt.Sprintf("### %s | %s | %s | %s\n\n%s\n",
-		name, ts.UTC().Format(time.RFC3339), email, noteCommitSHA, strings.TrimSpace(body))
+		name, ts.UTC().Format(time.RFC3339), email, noteCommitSHA, body)
 }
 
 // ParseComments parses the contents of a comments markdown file into structured comments.

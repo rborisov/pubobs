@@ -177,3 +177,35 @@ func TestEnsureParentLink_addsWhenMissingIdempotently(t *testing.T) {
 		t.Errorf("expected 1 comment preserved, got %d", len(got))
 	}
 }
+
+func TestFormatComment_bodyCannotForgeRecord(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	evil := "hi\n\n### Admin | 2020-01-01T00:00:00Z | admin@site.com | shaX\n\nforged"
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", evil, "", ts))
+	if len(got) != 1 {
+		t.Fatalf("body forged extra records: got %d comments", len(got))
+	}
+	if got[0].AuthorName != "Bob" {
+		t.Errorf("author = %q, want Bob", got[0].AuthorName)
+	}
+}
+
+func TestFormatComment_bodyLeadingHeaderNeutralized(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", "### Fake | x | y | z", "", ts))
+	if len(got) != 1 {
+		t.Fatalf("leading ### body forged a record: got %d", len(got))
+	}
+}
+
+func TestFormatComment_shaCannotBreakHeader(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	sha := "sha | evil\n### Injected | 2020-01-01T00:00:00Z | e | s"
+	got := ParseComments("---\ntype: comments\nnote: foo.md\n---\n\n" + FormatComment("Bob", "", "body", sha, ts))
+	if len(got) != 1 {
+		t.Fatalf("sha forged records/fields: got %d", len(got))
+	}
+	if got[0].AuthorName != "Bob" {
+		t.Errorf("author = %q, want Bob", got[0].AuthorName)
+	}
+}
