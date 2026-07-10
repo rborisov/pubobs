@@ -156,6 +156,41 @@ export function ensureReaderStyles(): void {
     .markdown-rendered tbody tr:nth-child(even) td {
       background: var(--r-hover-bg) !important;
     }
+    /* Long words / URLs shouldn't force the page wider than the screen. */
+    .markdown-rendered { overflow-wrap: anywhere; }
+    /* Wide code blocks scroll within themselves rather than off-screen.
+       Wide tables are wrapped in an overflow-x container at render time
+       (see reader-note.ts) for the same reason. */
+    .markdown-rendered pre { overflow-x: auto; max-width: 100%; }
+
+    /* ── Reader note-list layout (responsive) ─────────────────────────────
+       Moved off inline styles so a mobile breakpoint can restyle them. On a
+       phone the fixed 220px sidebar squeezed the note list into a sliver, so
+       below 640px the sidebar + list stack vertically and rows lay out top-to
+       -bottom instead of squeezing title vs. meta side by side. */
+    .r-list-wrap { max-width: 1100px; margin: 0 auto; padding: 32px 24px; font-family: system-ui, sans-serif; }
+    .r-list-body { display: flex; gap: 24px; align-items: flex-start; }
+    .r-list-sidebar {
+      width: 220px; flex-shrink: 0; position: sticky; top: 24px;
+      max-height: calc(100vh - 80px); overflow-y: auto;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+    .r-list-main { flex: 1; min-width: 0; }
+    .r-note-meta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: 16px; }
+    @media (max-width: 640px) {
+      .r-list-wrap { padding: 20px 14px; }
+      .r-list-body { flex-direction: column; gap: 16px; }
+      .r-list-sidebar {
+        width: auto; position: static; top: auto; max-height: none;
+        overflow: visible; gap: 14px;
+      }
+      .r-note-link { flex-direction: column; align-items: stretch; gap: 6px; }
+      .r-note-link-title, .r-note-link-filename { overflow-wrap: anywhere; }
+      .r-note-meta { margin-left: 0; flex-wrap: wrap; }
+      .r-note-link-date { margin-left: 0; }
+      .r-note-wrap { padding: 24px 14px !important; }
+      .markdown-rendered h1, .r-note-title { font-size: 1.5rem !important; }
+    }
   `;
   document.head.appendChild(style);
 }

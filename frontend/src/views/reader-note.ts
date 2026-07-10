@@ -23,6 +23,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const urlKey = new URLSearchParams(rawQuery).get('key') ?? undefined;
 
   const wrap = document.createElement('div');
+  wrap.className = 'r-note-wrap';
   wrap.style.cssText = 'padding:40px 24px;font-family:system-ui,sans-serif';
 
   // Inject Obsidian's theme CSS once per repo, with targeted patches for rules
@@ -78,6 +79,7 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   const article = document.createElement('article');
 
   const h1 = document.createElement('h1');
+  h1.className = 'r-note-title';
   h1.style.cssText = 'margin:0 0 8px;font-size:2rem;font-weight:700;line-height:1.2';
   h1.textContent = note.title;
   article.appendChild(h1);
@@ -145,6 +147,17 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     cb.style.setProperty('height', 'auto', 'important');
     cb.style.setProperty('opacity', '1', 'important');
     cb.style.setProperty('visibility', 'visible', 'important');
+  }
+  // Wide tables and code blocks would otherwise overflow the viewport and get
+  // cut off on small screens. Wrap each in a horizontally-scrollable container
+  // so only that element scrolls, keeping the page itself within the screen.
+  for (const el of Array.from(content.querySelectorAll<HTMLElement>('table, pre'))) {
+    if (el.parentElement?.classList.contains('r-scroll-x')) continue;
+    const scroller = document.createElement('div');
+    scroller.className = 'r-scroll-x';
+    scroller.style.cssText = 'overflow-x:auto;max-width:100%';
+    el.parentNode?.insertBefore(scroller, el);
+    scroller.appendChild(el);
   }
   article.appendChild(content);
 

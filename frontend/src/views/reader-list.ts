@@ -393,7 +393,7 @@ function renderNoteList(
       }
 
       const right = document.createElement('div');
-      right.style.cssText = 'display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:16px';
+      right.className = 'r-note-meta';
 
       const dateSpan = document.createElement('span');
       dateSpan.className = 'r-note-link-date';
@@ -425,7 +425,7 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
   ensureReaderStyles();
 
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'max-width:1100px;margin:0 auto;padding:32px 24px;font-family:system-ui,sans-serif';
+  wrap.className = 'r-list-wrap';
 
   let data: Awaited<ReturnType<typeof pubListNotes>>;
   try {
@@ -455,13 +455,11 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
 
   // Body: sidebar + main
   const body = document.createElement('div');
-  body.style.cssText = 'display:flex;gap:24px;align-items:flex-start';
+  body.className = 'r-list-body';
 
   // Sidebar
   const sidebar = document.createElement('div');
-  sidebar.style.cssText =
-    'width:220px;flex-shrink:0;position:sticky;top:24px;max-height:calc(100vh - 80px);' +
-    'overflow-y:auto;display:flex;flex-direction:column;gap:20px';
+  sidebar.className = 'r-list-sidebar';
 
   // Search
   const searchWrap = document.createElement('div');
@@ -496,7 +494,7 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
 
   // Main area
   const main = document.createElement('div');
-  main.style.cssText = 'flex:1;min-width:0';
+  main.className = 'r-list-main';
 
   const filterBar = document.createElement('div');
   filterBar.style.cssText =
