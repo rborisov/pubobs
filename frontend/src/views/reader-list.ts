@@ -441,9 +441,12 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
   const allTags = collectTags(notes);
   const folderTree = buildFolderTree(notes);
 
-  // Header — admins land here from the repos list, everyone else from their dashboard
+  // Header — admins land here from the repos list, other logged-in users from
+  // their dashboard. A non-authenticated visitor (guest-open or share-link) has
+  // no dashboard/repos page — those require auth and would error — so their
+  // back link goes to the login screen instead.
   const isAdmin = me?.is_instance_admin || me?.is_admin;
-  const backHref = isAdmin ? '#/repos' : '#/dashboard';
+  const backHref = me ? (isAdmin ? '#/repos' : '#/dashboard') : '#/login';
   const backLabel = isAdmin ? '← Repos' : '← My repos';
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;align-items:baseline;gap:16px;margin-bottom:28px';
