@@ -4,11 +4,30 @@ import {
 } from '../api';
 import { ensureReaderStyles } from '../reader-styles';
 
+type SortMode = 'recent' | 'name';
+
 interface ViewState {
   folder: string;     // "" = all notes
   tag: string | null; // null = no tag filter
   query: string;
   openFolders: Set<string>;
+  // 'recent' = flat list, most-recently-synced first (default); 'name' =
+  // folder-grouped, alphabetical (the classic browse view).
+  sort: SortMode;
+}
+
+const SORT_STORAGE_KEY = 'pubobs-note-sort';
+
+function loadSortMode(): SortMode {
+  try {
+    return localStorage.getItem(SORT_STORAGE_KEY) === 'name' ? 'name' : 'recent';
+  } catch {
+    return 'recent';
+  }
+}
+
+function saveSortMode(mode: SortMode): void {
+  try { localStorage.setItem(SORT_STORAGE_KEY, mode); } catch { /* ignore */ }
 }
 
 interface FolderNode {
@@ -318,6 +337,79 @@ function buildRowShareActions(repoId: string, note: PubNote): HTMLElement {
   return actions;
 }
 
+// buildNoteRow renders a single note link. showFolderPath displays the note's
+// full repo-relative path (used in the flat "recent" view, where notes from
+// different folders are interleaved and the folder heading is absent) vs. just
+// the file name (in the folder-grouped view, where the heading gives context).
+function buildNoteRow(
+  repoId: string,
+  note: PubNote,
+  canManageSharing: boolean,
+  showFolderPath: boolean,
+): HTMLAnchorElement {
+  const a = document.createElement('a');
+  a.href = `#/read/${repoId}/${note.path}`;
+  a.className = 'r-note-link';
+
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:0';
+
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'r-note-link-title';
+  titleSpan.textContent = note.title;
+  left.appendChild(titleSpan);
+
+  const fileNameSpan = document.createElement('span');
+  fileNameSpan.className = 'r-note-link-filename';
+  fileNameSpan.textContent = showFolderPath ? note.path : fileNameOf(note.path);
+  left.appendChild(fileNameSpan);
+
+  if ((note.tags ?? []).length > 0) {
+    const tagRow = document.createElement('div');
+    tagRow.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
+    for (const tag of note.tags) {
+      const t = document.createElement('span');
+      t.className = 'r-tag';
+      t.textContent = tag;
+      tagRow.appendChild(t);
+    }
+    left.appendChild(tagRow);
+  }
+
+  const right = document.createElement('div');
+  right.className = 'r-note-meta';
+
+  const dateSpan = document.createElement('span');
+  dateSpan.className = 'r-note-link-date';
+  dateSpan.style.marginLeft = '0';
+  dateSpan.textContent = note.synced_at
+    ? new Date(note.synced_at).toLocaleDateString() : '';
+  right.appendChild(dateSpan);
+
+  if (note.comment_count > 0) {
+    const commentBadge = document.createElement('span');
+    commentBadge.style.cssText = 'color:var(--r-text-faint);font-size:0.75rem;white-space:nowrap';
+    commentBadge.textContent = `💬 ${note.comment_count}`;
+    commentBadge.title = `${note.comment_count} comment${note.comment_count !== 1 ? 's' : ''}`;
+    right.appendChild(commentBadge);
+  }
+
+  if (canManageSharing) {
+    right.appendChild(buildRowShareActions(repoId, note));
+  }
+
+  a.appendChild(left);
+  a.appendChild(right);
+  return a;
+}
+
+// byRecentDesc orders notes by synced_at, most recent first. Notes without a
+// synced_at (never synced) sort to the bottom. ISO-8601 strings compare
+// lexicographically in chronological order, so string compare suffices.
+function byRecentDesc(a: PubNote, b: PubNote): number {
+  return (b.synced_at || '').localeCompare(a.synced_at || '');
+}
+
 function renderNoteList(
   container: HTMLElement,
   notes: PubNote[],
@@ -336,7 +428,16 @@ function renderNoteList(
     return;
   }
 
-  // Group by folder
+  // Recent view: one flat list, most recently synced first — the newest note
+  // is always at the top of the page regardless of folder.
+  if (state.sort === 'recent') {
+    for (const note of [...notes].sort(byRecentDesc)) {
+      container.appendChild(buildNoteRow(repoId, note, canManageSharing, true));
+    }
+    return;
+  }
+
+  // Name view: group by folder, alphabetical (notes already arrive path-sorted).
   const groups = new Map<string, PubNote[]>();
   for (const n of notes) {
     const folder = dirOf(n.path);
@@ -344,79 +445,26 @@ function renderNoteList(
     groups.get(folder)!.push(n);
   }
 
+  const headingCss =
+    'margin:24px 0 8px;font-size:0.75rem;font-weight:600;color:var(--r-text-muted);' +
+    'text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px;border-bottom:1px solid var(--r-border)';
+
   for (const [folder, items] of groups) {
     if (folder && !state.folder) {
       // Show folder heading only when not already filtered to a single folder
       const heading = document.createElement('div');
-      heading.style.cssText =
-        'margin:24px 0 8px;font-size:0.75rem;font-weight:600;color:var(--r-text-muted);' +
-        'text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px;border-bottom:1px solid var(--r-border)';
+      heading.style.cssText = headingCss;
       heading.textContent = folder;
       container.appendChild(heading);
     } else if (!folder && !state.folder && groups.size > 1) {
       const heading = document.createElement('div');
-      heading.style.cssText =
-        'margin:24px 0 8px;font-size:0.75rem;font-weight:600;color:var(--r-text-muted);' +
-        'text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px;border-bottom:1px solid var(--r-border)';
+      heading.style.cssText = headingCss;
       heading.textContent = '/';
       container.appendChild(heading);
     }
 
     for (const note of items) {
-      const a = document.createElement('a');
-      a.href = `#/read/${repoId}/${note.path}`;
-      a.className = 'r-note-link';
-
-      const left = document.createElement('div');
-      left.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:0';
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'r-note-link-title';
-      titleSpan.textContent = note.title;
-      left.appendChild(titleSpan);
-
-      const fileNameSpan = document.createElement('span');
-      fileNameSpan.className = 'r-note-link-filename';
-      fileNameSpan.textContent = fileNameOf(note.path);
-      left.appendChild(fileNameSpan);
-
-      if ((note.tags ?? []).length > 0) {
-        const tagRow = document.createElement('div');
-        tagRow.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
-        for (const tag of note.tags) {
-          const t = document.createElement('span');
-          t.className = 'r-tag';
-          t.textContent = tag;
-          tagRow.appendChild(t);
-        }
-        left.appendChild(tagRow);
-      }
-
-      const right = document.createElement('div');
-      right.className = 'r-note-meta';
-
-      const dateSpan = document.createElement('span');
-      dateSpan.className = 'r-note-link-date';
-      dateSpan.style.marginLeft = '0';
-      dateSpan.textContent = note.synced_at
-        ? new Date(note.synced_at).toLocaleDateString() : '';
-      right.appendChild(dateSpan);
-
-      if (note.comment_count > 0) {
-        const commentBadge = document.createElement('span');
-        commentBadge.style.cssText = 'color:var(--r-text-faint);font-size:0.75rem;white-space:nowrap';
-        commentBadge.textContent = `💬 ${note.comment_count}`;
-        commentBadge.title = `${note.comment_count} comment${note.comment_count !== 1 ? 's' : ''}`;
-        right.appendChild(commentBadge);
-      }
-
-      if (canManageSharing) {
-        right.appendChild(buildRowShareActions(repoId, note));
-      }
-
-      a.appendChild(left);
-      a.appendChild(right);
-      container.appendChild(a);
+      container.appendChild(buildNoteRow(repoId, note, canManageSharing, false));
     }
   }
 }
@@ -437,7 +485,7 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
 
   const { repo, notes, role } = data;
   const canManageSharing = role === 'editor' || role === 'admin';
-  const state: ViewState = { folder: '', tag: null, query: '', openFolders: new Set() };
+  const state: ViewState = { folder: '', tag: null, query: '', openFolders: new Set(), sort: loadSortMode() };
   const allTags = collectTags(notes);
   const folderTree = buildFolderTree(notes);
 
@@ -499,13 +547,50 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
   const main = document.createElement('div');
   main.className = 'r-list-main';
 
+  // Toolbar: note count (left) + Recent/Name sort toggle (right)
+  const toolbar = document.createElement('div');
+  toolbar.style.cssText =
+    'display:flex;align-items:center;justify-content:space-between;gap:12px;' +
+    'margin-bottom:12px;flex-wrap:wrap';
+
   const filterBar = document.createElement('div');
-  filterBar.style.cssText =
-    'font-size:0.8rem;color:var(--r-text-muted);margin-bottom:12px;min-height:1.2em';
-  main.appendChild(filterBar);
+  filterBar.style.cssText = 'font-size:0.8rem;color:var(--r-text-muted);min-height:1.2em';
+
+  const sortToggle = document.createElement('div');
+  sortToggle.style.cssText = 'display:flex;gap:4px;flex-shrink:0';
+
+  toolbar.appendChild(filterBar);
+  toolbar.appendChild(sortToggle);
+  main.appendChild(toolbar);
 
   const noteListEl = document.createElement('div');
   main.appendChild(noteListEl);
+
+  // Rebuilt on each refresh so the active option stays highlighted.
+  function renderSortToggle(): void {
+    sortToggle.innerHTML = '';
+    const opts: Array<{ label: string; mode: SortMode }> = [
+      { label: 'Recent', mode: 'recent' },
+      { label: 'Name', mode: 'name' },
+    ];
+    for (const { label, mode } of opts) {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      const active = state.sort === mode;
+      btn.style.cssText =
+        'font-size:0.75rem;padding:3px 10px;border-radius:999px;border:none;cursor:pointer;' +
+        (active
+          ? 'background:#5B6B8E;color:#fff'
+          : 'background:var(--r-tag-bg);color:var(--r-tag-text)');
+      btn.addEventListener('click', () => {
+        if (state.sort === mode) return;
+        state.sort = mode;
+        saveSortMode(mode);
+        refresh();
+      });
+      sortToggle.appendChild(btn);
+    }
+  }
 
   body.appendChild(sidebar);
   body.appendChild(main);
@@ -536,6 +621,9 @@ export async function readerListView(repoId: string, me: Me | null): Promise<HTM
       state.tag = tag;
       refresh();
     }));
+
+    // Sort toggle (rebuild to update active highlight)
+    renderSortToggle();
 
     // Note list
     renderNoteList(noteListEl, filtered, repoId, state, canManageSharing);
