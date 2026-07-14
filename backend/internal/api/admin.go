@@ -264,16 +264,36 @@ func handleAdminListRepoAccess(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "list access failed")
 			return
 		}
+
+		// Fetch user credentials to build a map of userID -> verify status
+		userCreds, err := deps.Store.ListUserCredentials(r.Context(), repoID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list credentials failed")
+			return
+		}
+		credMap := make(map[string]string)
+		for _, cred := range userCreds {
+			credMap[cred.UserID] = cred.VerifyStatus
+		}
+
 		type accessResp struct {
 			ID            string `json:"id"`
 			RepoID        string `json:"repo_id"`
 			PrincipalType string `json:"principal_type"`
 			PrincipalID   string `json:"principal_id"`
 			Role          string `json:"role"`
+			GitCredential string `json:"git_credential"`
 		}
 		out := make([]accessResp, len(entries))
 		for i, e := range entries {
-			out[i] = accessResp{e.ID, e.RepoID, e.PrincipalType, e.PrincipalID, e.Role}
+			gitCred := "none"
+			// Only meaningful for user entries; groups get "none"
+			if e.PrincipalType == "user" {
+				if status, ok := credMap[e.PrincipalID]; ok {
+					gitCred = status
+				}
+			}
+			out[i] = accessResp{e.ID, e.RepoID, e.PrincipalType, e.PrincipalID, e.Role, gitCred}
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
