@@ -12,6 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRepoOwnerHasImplicitAdminRole(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "owner1", "owner@x.com", "Owner") // not a global admin
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+	// Owner set directly with NO repo_access row — proves ownership alone
+	// carries admin permissions via requireRepoRole's owner fallback.
+	deps.Store.SetRepoOwner(ctx, "r1", "owner1")
+
+	req := httptest.NewRequest("PUT", "/api/repos/r1/git-credential", strings.NewReader(`{"username":"o","token":"tok"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", bearerHeader(t, deps, "owner1", "owner@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+}
+
 func TestSetAndDeleteGitCredential(t *testing.T) {
 	deps := newTestDeps(t)
 	ctx := context.Background()

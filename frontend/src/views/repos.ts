@@ -65,7 +65,7 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
 
   const table = document.createElement('table');
   table.innerHTML = `<thead><tr>
-    <th>Name</th><th>Remote</th><th>Branch</th>
+    <th>Name</th><th>Remote</th><th>Branch</th><th>Owner</th>
     <th title="Whether this server currently has a local working copy of the repo (created automatically the first time it's synced, browsed, or imported).">Status</th>
     <th>Guest</th><th></th>
   </tr></thead>`;
@@ -93,6 +93,11 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
 
     const branchCell = document.createElement('td');
     branchCell.textContent = repo.default_branch;
+
+    const ownerCell = document.createElement('td');
+    ownerCell.style.cssText = 'color:#555;font-size:0.8rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    ownerCell.textContent = repo.owner_email ?? '—';
+    ownerCell.title = repo.owner_email ?? 'No owner set';
 
     const statusCell = document.createElement('td');
     statusCell.textContent = repo.is_cloned ? '● cloned' : '○ not cloned yet';
@@ -170,6 +175,7 @@ function renderTable(container: HTMLElement, repos: Repo[], me: Me): void {
     row.appendChild(nameCell);
     row.appendChild(remoteCell);
     row.appendChild(branchCell);
+    row.appendChild(ownerCell);
     row.appendChild(statusCell);
     row.appendChild(guestCell);
     row.appendChild(actionsCell);

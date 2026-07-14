@@ -49,10 +49,31 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			StorageDestinationID *string `json:"storage_destination_id"`
 			MigrationStatus      string  `json:"migration_status"`
 			OwnerUserID          *string `json:"owner_user_id"`
+			OwnerEmail           *string `json:"owner_email"`
 			StrictCredentials    bool    `json:"strict_credentials"`
+		}
+		// Resolve owner emails once per distinct owner for the list's Owner
+		// column, so the UI needn't load the full user directory to show them.
+		ownerEmails := map[string]string{}
+		for _, repo := range repos {
+			if repo.OwnerUserID == nil {
+				continue
+			}
+			if _, ok := ownerEmails[*repo.OwnerUserID]; ok {
+				continue
+			}
+			if u, uerr := deps.Store.GetUserByID(r.Context(), *repo.OwnerUserID); uerr == nil && u != nil {
+				ownerEmails[*repo.OwnerUserID] = u.Email
+			}
 		}
 		out := make([]repoResp, len(repos))
 		for i, repo := range repos {
+			var ownerEmail *string
+			if repo.OwnerUserID != nil {
+				if e, ok := ownerEmails[*repo.OwnerUserID]; ok {
+					ownerEmail = &e
+				}
+			}
 			role := "admin"
 			if !claims.IsAdmin {
 				role = roles[repo.ID]
@@ -71,7 +92,8 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 				DefaultBranch: repo.DefaultBranch, IsCloned: isCloned,
 				Role: role, AllowGuest: repo.AllowGuest,
 				StorageDestinationID: repo.StorageDestinationID, MigrationStatus: repo.MigrationStatus,
-				OwnerUserID: repo.OwnerUserID, StrictCredentials: repo.StrictCredentials,
+				OwnerUserID: repo.OwnerUserID, OwnerEmail: ownerEmail,
+				StrictCredentials: repo.StrictCredentials,
 			}
 		}
 		writeJSON(w, http.StatusOK, out)

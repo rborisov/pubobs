@@ -183,18 +183,19 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
     ownerRow.innerHTML = `<span style="font-weight:600">Owner</span><span>${esc(ownerUser?.email ?? '—')}</span>`;
     ownerSection.appendChild(ownerRow);
 
-    const adminUsers = users.filter(u => u.is_instance_admin || u.is_admin);
     const transferRow = document.createElement('div');
     transferRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
 
     const transferLabel = document.createElement('span');
     transferLabel.style.cssText = 'font-size:0.8rem;color:#475569';
-    transferLabel.textContent = 'Transfer ownership';
+    transferLabel.textContent = 'Set owner';
     transferRow.appendChild(transferLabel);
 
     const select = document.createElement('select');
     select.style.cssText = 'padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.875rem';
-    for (const u of adminUsers) {
+    // Any user can be made owner; the transfer grants them admin permissions
+    // on this repo.
+    for (const u of users) {
       const opt = document.createElement('option');
       opt.value = u.id;
       opt.textContent = u.email;
@@ -203,10 +204,15 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
     if (repo.owner_user_id) select.value = repo.owner_user_id;
     transferRow.appendChild(select);
 
-    const transferBtn = mkBtn('Transfer', 'ghost');
-    if (adminUsers.length === 0) transferBtn.disabled = true;
+    const transferBtn = mkBtn('Set owner', 'ghost');
+    if (users.length === 0) transferBtn.disabled = true;
     transferRow.appendChild(transferBtn);
     ownerSection.appendChild(transferRow);
+
+    const ownerNote = document.createElement('div');
+    ownerNote.style.cssText = 'color:#64748b;font-size:0.8rem;margin-top:4px';
+    ownerNote.textContent = 'The owner is granted admin permissions on this repo.';
+    ownerSection.appendChild(ownerNote);
 
     const transferErr = document.createElement('div');
     transferErr.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin-top:8px';
@@ -319,7 +325,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
       accessSection.appendChild(p);
     } else {
       const table = document.createElement('table');
-      table.innerHTML = `<thead><tr><th>Type</th><th>User</th><th>Role</th><th>Git credential</th><th></th></tr></thead>`;
+      table.innerHTML = `<thead><tr><th>Type</th><th>User</th><th>Role</th><th></th></tr></thead>`;
       const tbody = document.createElement('tbody');
       for (const entry of list) {
         const user = users.find(u => u.id === entry.principal_id);
@@ -328,7 +334,6 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
           <td>${esc(entry.principal_type)}</td>
           <td>${esc(user?.email ?? entry.principal_id)}</td>
           <td>${esc(entry.role)}</td>
-          <td>${entry.principal_type === 'user' ? esc(credentialStatusLabel(entry.git_credential)) : ''}</td>
           <td></td>
         `;
         const revokeBtn = mkBtn('Revoke', 'danger-sm');
@@ -442,15 +447,6 @@ function mkBtn(text: string, variant: 'ghost' | 'danger' | 'danger-sm'): HTMLBut
   };
   b.style.cssText = styles[variant];
   return b;
-}
-
-function credentialStatusLabel(status: string | undefined): string {
-  switch (status) {
-    case 'verified': return '✓ verified (read)';
-    case 'auth_failed': return '✗ auth failed';
-    case 'unverified': return '• unverified';
-    default: return '—';
-  }
 }
 
 function esc(s: string): string {

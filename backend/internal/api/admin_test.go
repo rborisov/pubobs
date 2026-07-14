@@ -414,7 +414,7 @@ func TestListRepos_includesOwnerAndStrict(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `"strict_credentials":true`)
 }
 
-func TestAdminSetRepoOwner_rejectsNonAdminTarget(t *testing.T) {
+func TestAdminSetRepoOwner_grantsAdminToNonAdminTarget(t *testing.T) {
 	deps := newTestDeps(t)
 	ctx := context.Background()
 	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
@@ -425,6 +425,16 @@ func TestAdminSetRepoOwner_rejectsNonAdminTarget(t *testing.T) {
 	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
 	rr := httptest.NewRecorder()
 	api.BuildRouter(deps).ServeHTTP(rr, req)
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-	require.Contains(t, rr.Body.String(), "admin")
+	// A non-admin can now be made owner; ownership carries admin permissions,
+	// so the transfer succeeds and grants the new owner the admin repo role.
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	repo, err := deps.Store.GetRepo(ctx, "r1")
+	require.NoError(t, err)
+	require.NotNil(t, repo.OwnerUserID)
+	require.Equal(t, "u2", *repo.OwnerUserID)
+
+	role, err := deps.Store.GetUserRole(ctx, "u2", "r1")
+	require.NoError(t, err)
+	require.Equal(t, "admin", role)
 }

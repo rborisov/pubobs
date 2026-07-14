@@ -9,6 +9,7 @@ export interface Repo {
   storage_destination_id: string | null;
   migration_status: string; // "idle" | "running" | "done" | "failed"
   owner_user_id?: string | null;
+  owner_email?: string | null;
   strict_credentials?: boolean;
 }
 

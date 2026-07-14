@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/pubobs/backend/internal/auth"
 )
 
@@ -31,18 +32,17 @@ func handleAdminSetRepoOwner(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "unknown user")
 			return
 		}
-		targetAdmin := u.IsInstanceAdmin || u.IsAdmin
-		if !targetAdmin {
-			if role, _ := deps.Store.GetUserRole(r.Context(), body.OwnerUserID, repoID); role == "admin" {
-				targetAdmin = true
-			}
-		}
-		if !targetAdmin {
-			writeError(w, http.StatusBadRequest, "owner must be an admin of the repo")
-			return
-		}
 		if err := deps.Store.SetRepoOwner(r.Context(), repoID, body.OwnerUserID); err != nil {
 			writeError(w, http.StatusInternalServerError, "set owner failed")
+			return
+		}
+		// The owner has admin permissions on the repo. Grant an explicit admin
+		// access row (upsert) so they can manage it and it shows up in their
+		// repo list; requireRepoRole/requireRepoManage also treat the owner as
+		// admin directly, so ownership authority survives even if this row is
+		// later changed.
+		if err := deps.Store.GrantAccess(r.Context(), uuid.NewString(), repoID, "user", body.OwnerUserID, "admin"); err != nil {
+			writeError(w, http.StatusInternalServerError, "grant owner admin failed")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

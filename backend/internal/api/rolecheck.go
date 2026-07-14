@@ -9,6 +9,19 @@ import (
 	"github.com/pubobs/backend/internal/model"
 )
 
+// isRepoOwner reports whether userID is the designated owner of the repo. The
+// owner is treated as a repo admin everywhere, independent of repo_access rows.
+func isRepoOwner(ctx context.Context, deps *Deps, userID, repoID string) bool {
+	if userID == "" {
+		return false
+	}
+	repo, err := deps.Store.GetRepo(ctx, repoID)
+	if err != nil || repo == nil || repo.OwnerUserID == nil {
+		return false
+	}
+	return *repo.OwnerUserID == userID
+}
+
 func requireRepoRole(ctx context.Context, deps *Deps, claims *auth.AccessClaims, repoID, required string) error {
 	if claims.IsAdmin {
 		return nil
@@ -17,10 +30,15 @@ func requireRepoRole(ctx context.Context, deps *Deps, claims *auth.AccessClaims,
 	if err != nil {
 		return errors.New("role check failed")
 	}
-	if !model.RoleAtLeast(role, required) {
-		return errors.New(required + " role required")
+	if model.RoleAtLeast(role, required) {
+		return nil
 	}
-	return nil
+	// The repo owner has admin permissions regardless of access rows. Checked
+	// only on the failing branch so the common path keeps its single query.
+	if isRepoOwner(ctx, deps, claims.UserID, repoID) {
+		return nil
+	}
+	return errors.New(required + " role required")
 }
 
 func requireAnyAdmin(claims *auth.AccessClaims, w http.ResponseWriter) bool {
@@ -33,6 +51,11 @@ func requireAnyAdmin(claims *auth.AccessClaims, w http.ResponseWriter) bool {
 
 func requireRepoManage(ctx context.Context, deps *Deps, claims *auth.AccessClaims, repoID string, w http.ResponseWriter) bool {
 	if claims.IsAdmin {
+		return true
+	}
+	// The owner can manage their own repo even without the global user-admin
+	// flag — ownership carries admin permissions.
+	if isRepoOwner(ctx, deps, claims.UserID, repoID) {
 		return true
 	}
 	if !claims.IsUserAdmin {
