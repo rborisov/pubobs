@@ -95,7 +95,11 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			cacheAssets = append(cacheAssets, gitcache.SyncAsset{Path: a.Path, Content: data})
 		}
 
-		user, _ := deps.Store.GetUserByID(r.Context(), claims.UserID)
+		user, err := deps.Store.GetUserByID(r.Context(), claims.UserID)
+		if err != nil || user == nil {
+			writeError(w, http.StatusInternalServerError, "user lookup failed")
+			return
+		}
 		commitMsg := fmt.Sprintf("pubobs: sync %s by %s", time.Now().UTC().Format(time.RFC3339), user.Email)
 
 		// Owner service credential (clone/reads + fallback push).
@@ -122,8 +126,21 @@ func handleSync(deps *Deps) http.HandlerFunc {
 
 		authorName := user.Name
 		authorEmail := user.Email
-		// (Phase 2 lets the user set git_name/git_email explicitly; until then use
-		// their account identity.)
+		// Prefer the syncing user's stored (repo, user) git credential identity
+		// (git_name/git_email, set via PUT .../git-credential) over their plain
+		// account name/email when present — lets a user commit under a distinct
+		// git identity (e.g. matching their GitHub account) without changing
+		// their pubobs account name/email. Falls back to the account identity
+		// per-field: a credential with only one of git_name/git_email set keeps
+		// the account value for the other.
+		if gn, ge, ok, _ := deps.Store.GetUserCredentialGitIdentity(r.Context(), repoID, claims.UserID); ok {
+			if gn != "" {
+				authorName = gn
+			}
+			if ge != "" {
+				authorEmail = ge
+			}
+		}
 
 		sha, err := deps.Cache.Sync(r.Context(), repo, ownerCred, pushCred, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg, authorName, authorEmail)
 		if err != nil {

@@ -261,17 +261,28 @@ func warnIfCredsUnusable(remoteURL, credJSON string, applied bool) {
 }
 
 // gitIdentityEnv returns the GIT_AUTHOR_*/GIT_COMMITTER_* environment
-// overrides for a git invocation. Empty author/committer name+email pairs
-// fall back to the fixed pubobs/pubobs@localhost identity every git
+// overrides for a git invocation. Each of the four fields falls back to the
+// fixed pubobs/pubobs@localhost identity independently when empty — so a
+// caller that has (say) a known email but no name (e.g. a stored git
+// credential with git_email set but git_name left blank) keeps that email
+// rather than having it discarded just because the name was empty. When both
+// name and email for a role are empty, that role's pair defaults to
+// pubobs/pubobs@localhost together, preserving the fixed identity every git
 // invocation used unconditionally before per-user identities existed — so
 // every call site that doesn't have (or care about) a real editor identity
 // keeps behaving exactly as before.
 func gitIdentityEnv(authorName, authorEmail, committerName, committerEmail string) []string {
 	if authorName == "" {
-		authorName, authorEmail = "pubobs", "pubobs@localhost"
+		authorName = "pubobs"
+	}
+	if authorEmail == "" {
+		authorEmail = "pubobs@localhost"
 	}
 	if committerName == "" {
-		committerName, committerEmail = "pubobs", "pubobs@localhost"
+		committerName = "pubobs"
+	}
+	if committerEmail == "" {
+		committerEmail = "pubobs@localhost"
 	}
 	return []string{
 		"GIT_AUTHOR_NAME=" + authorName,

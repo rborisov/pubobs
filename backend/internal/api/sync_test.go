@@ -271,6 +271,50 @@ func TestHandleSync_strictRejectsWhenNoUserCredential(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "credential")
 }
 
+// TestHandleSync_usesStoredGitIdentityAsAuthor verifies handleSync prefers
+// the syncing user's stored (repo, user) git credential identity
+// (git_name/git_email) as the commit author over their plain account
+// name/email, once one has been configured via PUT .../git-credential.
+// Mirrors the Phase-1 attribution-test approach (TestCache_Sync_authoredByUser
+// in gitcache/cache_test.go): read the pushed commit's %an/%ae, here off the
+// bare remote handleSync actually pushed to.
+func TestHandleSync_usesStoredGitIdentityAsAuthor(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	// Configure a git credential for u1 on r1 with a distinct git identity
+	// (username/token are irrelevant here — the bare-repo remote has no auth
+	// gate — only git_name/git_email matter for this test).
+	credBody := strings.NewReader(`{"username":"u1","token":"tok","git_name":"Custom","git_email":"custom@x.com"}`)
+	credReq := httptest.NewRequest("PUT", "/api/repos/r1/git-credential", credBody)
+	credReq.Header.Set("Content-Type", "application/json")
+	credReq.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	credRR := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(credRR, credReq)
+	require.Equal(t, http.StatusOK, credRR.Code, credRR.Body.String())
+
+	payload := `{"files":[{"path":"notes/hello.md","md_content":"# Hello","encrypted_html":"dGVzdCBlbmNyeXB0ZWQgaHRtbA==","frontmatter":{}}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	an, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%an").Output()
+	require.NoError(t, err)
+	ae, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%ae").Output()
+	require.NoError(t, err)
+	require.Equal(t, "Custom", strings.TrimSpace(string(an)), "commit author must use the stored git credential's git_name, not the account name")
+	require.Equal(t, "custom@x.com", strings.TrimSpace(string(ae)), "commit author email must use the stored git credential's git_email, not the account email")
+}
+
 func mustGetRepo(t *testing.T, deps *api.Deps, repoID string) *model.Repo {
 	t.Helper()
 	repo, err := deps.Store.GetRepo(context.Background(), repoID)
