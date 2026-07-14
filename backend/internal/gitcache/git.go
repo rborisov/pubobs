@@ -373,6 +373,21 @@ func (g *GitRunner) Clone(dir, remoteURL, credJSON, branch string) error {
 	return err
 }
 
+// LsRemote checks whether credJSON can reach remoteURL (read access), without
+// needing a local clone. Auth rejection is returned as ErrGitAuthFailed via
+// classifyGitError; used to verify a user's stored git credential.
+func (g *GitRunner) LsRemote(remoteURL, credJSON string) error {
+	authedURL := credentialedURL(remoteURL, credJSON)
+	// ls-remote doesn't touch the working dir; run it in a throwaway temp dir.
+	dir, err := os.MkdirTemp("", "pubobs-lsremote-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	_, err = g.runNetwork(dir, g.fetchTimeout(), "ls-remote", "--heads", authedURL)
+	return err
+}
+
 // dubiousOwnershipMarker is the substring git (2.35.2+) prints when it
 // refuses to operate on a repository directory owned by a different user
 // than the process's effective UID ("detected dubious ownership in
