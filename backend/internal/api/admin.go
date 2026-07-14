@@ -67,6 +67,9 @@ func handleAdminCreateRepo(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "create repo failed")
 			return
 		}
+		if err := deps.Store.SetRepoOwner(r.Context(), repo.ID, claims.UserID); err != nil {
+			log.Printf("[pubobs] set repo owner on create %s: %v", repo.ID, err)
+		}
 		if !claims.IsAdmin {
 			if err := deps.Store.GrantAccess(r.Context(), uuid.NewString(), repo.ID, "user", claims.UserID, "admin"); err != nil {
 				log.Printf("[pubobs] auto-grant admin on repo %s for user %s failed: %v", repo.ID, claims.UserID, err)

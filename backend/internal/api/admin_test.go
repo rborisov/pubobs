@@ -284,3 +284,47 @@ func TestAdminDeleteGroup(t *testing.T) {
 	api.BuildRouter(deps).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 }
+
+func TestAdminSetRepoOwner(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.SetInstanceAdmin(ctx, "admin1", true)
+	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "User Two")
+	repo, _ := deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+
+	body := strings.NewReader(`{"owner_user_id":"u2"}`)
+	req := httptest.NewRequest("POST", "/api/admin/repos/"+repo.ID+"/owner", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	retrievedRepo, _ := deps.Store.GetRepo(ctx, repo.ID)
+	require.NotNil(t, retrievedRepo.OwnerUserID)
+	require.Equal(t, "u2", *retrievedRepo.OwnerUserID)
+}
+
+func TestAdminCreateRepo_setsOwnerToCreator(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.SetInstanceAdmin(ctx, "admin1", true)
+
+	body := `{"name":"My Repo","remote_url":"https://github.com/org/repo.git","username":"x-access-token","password":"ghp_test","default_branch":"main"}`
+	req := httptest.NewRequest("POST", "/api/admin/repos", strings.NewReader(body))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	repoID := resp["id"]
+	require.NotEmpty(t, repoID)
+
+	repo, _ := deps.Store.GetRepo(ctx, repoID)
+	require.NotNil(t, repo.OwnerUserID)
+	require.Equal(t, "admin1", *repo.OwnerUserID)
+}
