@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pubobs/backend/internal/gitcache"
@@ -29,7 +31,7 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 	files := []gitcache.SyncFile{
 		{Path: "newdoc.md", MDContent: "# New"},
 	}
-	sha, err := cache.Sync(context.Background(), repo, "", files, []gitcache.SyncAsset{}, nil, "sync 2024-01-01 by alice")
+	sha, err := cache.Sync(context.Background(), repo, "", "", files, []gitcache.SyncAsset{}, nil, "sync 2024-01-01 by alice", "", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sha)
 
@@ -53,6 +55,63 @@ func TestCache_SyncAndListFiles(t *testing.T) {
 // (still quoted/escaped) as the <path> argument to `git show HEAD:<path>`.
 // This exercises the exact call chain from the bug report: Cache.ListFiles ->
 // GitRunner.ListFiles (ls-files) -> GitRunner.ReadFile (show) + BlobSHA (ls-tree).
+// TestCache_Sync_authoredByUser verifies Sync threads the caller-supplied
+// author identity through to the commit (author == committer == the
+// editor), rather than the fixed pubobs identity. The %an/%ae assertion
+// itself lives in git_test.go's TestAddCommitPush_setsAuthor (AddCommitPush
+// is exercised directly there with a readable local clone); here Cache has
+// no log-reading helper exposed, so this asserts the new
+// cloneCredJSON/pushCredJSON/author-identity call shape succeeds end to end
+// against a real bare-repo remote, and that the resulting commit is
+// reachable via a fresh clone (i.e. the push with the derived pushCredJSON
+// fallback actually happened).
+func TestCache_Sync_authoredByUser(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+	repo := &model.Repo{ID: "r1", RemoteURL: bareURL, DefaultBranch: "main"}
+
+	sha, err := cache.Sync(context.Background(), repo, "", "", []gitcache.SyncFile{{Path: "n.md", MDContent: "# hi"}},
+		nil, nil, "sync", "Alice", "alice@example.com")
+	require.NoError(t, err)
+	require.NotEmpty(t, sha)
+
+	an, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%an").Output()
+	require.NoError(t, err)
+	ae, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%ae").Output()
+	require.NoError(t, err)
+	require.Equal(t, "Alice", strings.TrimSpace(string(an)))
+	require.Equal(t, "alice@example.com", strings.TrimSpace(string(ae)))
+}
+
+// TestCache_AppendComment_pushCredFallback verifies that when pushCredJSON
+// is empty, AppendComment falls back to cloneCredJSON — exercised here with
+// both empty (the anonymous/public-repo case both existing tests already
+// use), confirming the fallback path doesn't break the ordinary call shape.
+// It also checks the comment's author identity (not the commit identity,
+// which AddCommitPush's own tests cover) is unaffected by the credential
+// plumbing change.
+func TestCache_AppendComment_pushCredFallback(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cacheDir := t.TempDir()
+	cache := gitcache.NewCache(cacheDir)
+	repo := &model.Repo{ID: "r5", RemoteURL: bareURL, DefaultBranch: "main"}
+
+	err := cache.AppendComment(context.Background(), repo, "", "", "notes/test.md", "Carol", "carol@example.com", "Hi", "sha1")
+	require.NoError(t, err)
+
+	an, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%an").Output()
+	require.NoError(t, err)
+	cn, err := exec.Command("git", "-C", bareURL, "log", "-1", "--format=%cn").Output()
+	require.NoError(t, err)
+	require.Equal(t, "Carol", strings.TrimSpace(string(an)), "comment commit author should be the commenter")
+	require.Equal(t, "pubobs", strings.TrimSpace(string(cn)), "comment commit committer should be pubobs")
+}
+
 func TestCache_ListFiles_NonASCIIFilename(t *testing.T) {
 	bareURL := newBareRepo(t)
 	seedBareRepo(t, bareURL)
@@ -152,9 +211,9 @@ func TestCache_Sync_ClearsStaleLockFile(t *testing.T) {
 	lockPath := filepath.Join(localPath, ".git", "index.lock")
 	require.NoError(t, os.WriteFile(lockPath, []byte(""), 0644))
 
-	_, err = cache.Sync(context.Background(), repo, "", []gitcache.SyncFile{
+	_, err = cache.Sync(context.Background(), repo, "", "", []gitcache.SyncFile{
 		{Path: "second.md", MDContent: "# Second"},
-	}, []gitcache.SyncAsset{}, nil, "sync 2024-01-02 by alice")
+	}, []gitcache.SyncAsset{}, nil, "sync 2024-01-02 by alice", "", "")
 	require.NoError(t, err, "Sync should clear a stale index.lock left by an interrupted process")
 
 	_, statErr := os.Stat(lockPath)
@@ -189,7 +248,7 @@ func TestCache_Sync_DeletesRemovedPaths(t *testing.T) {
 	}
 	require.Contains(t, pathsBefore, "hello.md")
 
-	sha, err := cache.Sync(context.Background(), repo, "", nil, nil, []string{"hello.md"}, "sync: delete hello.md")
+	sha, err := cache.Sync(context.Background(), repo, "", "", nil, nil, []string{"hello.md"}, "sync: delete hello.md", "", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sha)
 
@@ -254,7 +313,7 @@ func TestCache_Sync_DeletesManyNonASCIIPaths(t *testing.T) {
 		{Path: "knowledge/overview.md", MDContent: "# Overview"},
 	}
 
-	sha, err := cache.Sync(context.Background(), repo, "", newFiles, nil, cyrillicPaths, "sync: rename Cyrillic notes to Latin")
+	sha, err := cache.Sync(context.Background(), repo, "", "", newFiles, nil, cyrillicPaths, "sync: rename Cyrillic notes to Latin", "", "")
 	require.NoError(t, err, "Sync must succeed when deleting many non-ASCII paths in one call")
 	require.NotEmpty(t, sha)
 
@@ -289,7 +348,7 @@ func TestCache_Sync_DeletedPathAlreadyGone(t *testing.T) {
 		DefaultBranch:  "main",
 	}
 
-	sha, err := cache.Sync(context.Background(), repo, "", nil, nil, []string{"never-existed.md"}, "sync: delete nonexistent path")
+	sha, err := cache.Sync(context.Background(), repo, "", "", nil, nil, []string{"never-existed.md"}, "sync: delete nonexistent path", "", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sha)
 }
@@ -309,7 +368,7 @@ func TestCache_AppendComment(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := cache.AppendComment(ctx, repo, "", "notes/test.md", "Alice", "alice@example.com", "Hello world", "sha1")
+	err := cache.AppendComment(ctx, repo, "", "", "notes/test.md", "Alice", "alice@example.com", "Hello world", "sha1")
 	require.NoError(t, err)
 
 	commentsPath := filepath.Join(cacheDir, "r2", "notes", "test-comments.md")
@@ -322,7 +381,7 @@ func TestCache_AppendComment(t *testing.T) {
 	require.Contains(t, content, "alice@example.com", "should contain author email")
 	require.Contains(t, content, "Hello world", "should contain comment body")
 
-	err = cache.AppendComment(ctx, repo, "", "notes/test.md", "Bob", "bob@example.com", "Second comment", "sha2")
+	err = cache.AppendComment(ctx, repo, "", "", "notes/test.md", "Bob", "bob@example.com", "Second comment", "sha2")
 	require.NoError(t, err)
 
 	data, err = os.ReadFile(commentsPath)

@@ -68,9 +68,69 @@ func TestAddCommitPush(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(cloneDir, "docs"), 0755))
 	os.WriteFile(filepath.Join(cloneDir, "docs/note.md"), []byte("# Note"), 0644)
 
-	sha, err := g.AddCommitPush(cloneDir, bareURL, "", "main", "pubobs: sync 2024-01-01 by alice")
+	sha, err := g.AddCommitPush(cloneDir, bareURL, "", "main", "pubobs: sync 2024-01-01 by alice", "", "", "", "")
 	require.NoError(t, err)
 	require.Len(t, sha, 40)
+}
+
+// TestAddCommitPush_setsAuthor verifies AddCommitPush attributes the commit
+// to the caller-supplied author/committer identity (the editor) rather than
+// the fixed pubobs identity every other local git invocation uses. Reads the
+// commit back via a raw `git log` invocation (not g.run, which is unexported
+// and this is an external _test package) mirroring how other tests here
+// (e.g. TestFetchReset) inspect state via exec.Command directly.
+func TestAddCommitPush_setsAuthor(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(cloneDir, "n.md"), []byte("# hi"), 0644))
+
+	_, err := g.AddCommitPush(cloneDir, bareURL, "", "main", "msg", "Alice", "alice@example.com", "Alice", "alice@example.com")
+	require.NoError(t, err)
+
+	an, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%an").Output()
+	require.NoError(t, err)
+	ae, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%ae").Output()
+	require.NoError(t, err)
+	cn, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%cn").Output()
+	require.NoError(t, err)
+	ce, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%ce").Output()
+	require.NoError(t, err)
+
+	require.Equal(t, "Alice", strings.TrimSpace(string(an)))
+	require.Equal(t, "alice@example.com", strings.TrimSpace(string(ae)))
+	require.Equal(t, "Alice", strings.TrimSpace(string(cn)))
+	require.Equal(t, "alice@example.com", strings.TrimSpace(string(ce)))
+}
+
+// TestAddCommitPush_defaultIdentity verifies that empty author/committer
+// identity fields fall back to the historical fixed pubobs/pubobs@localhost
+// identity, preserving prior behavior (e.g. AppendComment's committer, or
+// any caller that doesn't have a real editor identity available).
+func TestAddCommitPush_defaultIdentity(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	cloneDir := t.TempDir()
+	g := gitcache.NewGitRunner()
+	require.NoError(t, g.Clone(cloneDir, bareURL, "", "main"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(cloneDir, "n2.md"), []byte("# hi"), 0644))
+
+	_, err := g.AddCommitPush(cloneDir, bareURL, "", "main", "msg", "", "", "", "")
+	require.NoError(t, err)
+
+	an, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%an").Output()
+	require.NoError(t, err)
+	ae, err := exec.Command("git", "-C", cloneDir, "log", "-1", "--format=%ae").Output()
+	require.NoError(t, err)
+
+	require.Equal(t, "pubobs", strings.TrimSpace(string(an)))
+	require.Equal(t, "pubobs@localhost", strings.TrimSpace(string(ae)))
 }
 
 func TestFetchReset(t *testing.T) {

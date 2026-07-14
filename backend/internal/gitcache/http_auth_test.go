@@ -370,6 +370,55 @@ func TestClone_CorrectCredentialsSucceedsAgainstAuthGatedRemote(t *testing.T) {
 	require.Contains(t, files, "hello.md")
 }
 
+// TestAddCommitPush_pushUsesPushCredNotCloneCred closes a test gap left by
+// every other AddCommitPush/Cache.Sync test passing "" for both the clone and
+// push credentials: an empty credJSON collapses to the same value via the
+// pushCred=="" -> cloneCred fallback (see credentialedURL), so a bug that
+// accidentally routed the clone credential into the push (or vice versa)
+// would still pass every existing test. This test uses two DISTINGUISHABLE
+// credentials against an auth-gated remote (only "validpass" is accepted) to
+// prove the two are actually wired to their own git operations: clone
+// succeeds with the valid credential, and a subsequent push with a
+// deliberately wrong credential fails with ErrGitAuthFailed — which would
+// only happen if AddCommitPush is really applying pushCredJSON to the push,
+// not silently reusing whatever credential the clone used.
+func TestAddCommitPush_pushUsesPushCredNotCloneCred(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	srv := newAuthRequiredGitServer(t, bareURL, "validuser", "validpass")
+	repoURL := srv.URL + "/remote.git"
+
+	validCred := `{"username":"validuser","password":"validpass"}`
+	wrongCred := `{"username":"validuser","password":"wrong-password"}`
+
+	g := gitcache.NewGitRunner()
+	cloneDir := t.TempDir()
+
+	// Clone with the valid credential as the CLONE credential — must
+	// succeed, proving Clone used the (correct) clone credential.
+	require.NoError(t, g.Clone(cloneDir, repoURL, validCred, "main"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(cloneDir, "push-cred-check.md"), []byte("# hi"), 0644))
+
+	// Push with a WRONG push credential, against a clone that only ever saw
+	// the valid one. If AddCommitPush mistakenly fell back to (or reused)
+	// the clone credential, this push would succeed; instead it must fail
+	// with ErrGitAuthFailed, proving pushCredJSON — not the clone
+	// credential — is what actually got applied to the push.
+	_, err := g.AddCommitPush(cloneDir, repoURL, wrongCred, "main", "msg", "Al", "a@x", "Al", "a@x")
+	require.Error(t, err, "push with a wrong push credential must fail even though the clone credential was valid")
+	require.ErrorIs(t, err, gitcache.ErrGitAuthFailed)
+
+	// Positive control: the same pending commit pushes successfully once
+	// given the valid credential as the push credential, confirming the
+	// prior failure was specifically about the wrong credential (not some
+	// unrelated breakage in the test setup).
+	sha, err := g.AddCommitPush(cloneDir, repoURL, validCred, "main", "msg", "Al", "a@x", "Al", "a@x")
+	require.NoError(t, err)
+	require.Len(t, sha, 40)
+}
+
 // TestGetOrClone_TimedOutFirstCloneLeavesNothingAtLivePath is the regression
 // test for the 494ca9da self-reinforcing-loop incident: a clone that times
 // out partway through must not leave anything (partial or otherwise) at the

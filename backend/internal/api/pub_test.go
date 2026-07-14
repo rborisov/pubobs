@@ -1006,3 +1006,33 @@ func TestPubListNotes_includesCommentCount(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	require.Contains(t, rr.Body.String(), "\"comment_count\":1")
 }
+
+// TestPubPostComment_gitAuthorIsCommenter posts an anonymous comment to a
+// guest-open repo (real bare-repo remote) and asserts it's created (201) and
+// reads back with author_name":"Bob", confirming the comment round-trips
+// end-to-end through the new signature where the git author is the commenter.
+func TestPubPostComment_gitAuthorIsCommenter(t *testing.T) {
+	deps, _ := newTestDepsForPub(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "reader@x.com", "Reader")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	require.NoError(t, deps.Store.SetRepoAllowGuest(ctx, "r1", true))
+	note, err := deps.Store.UpsertNote(ctx, "r1", "docs/intro.md")
+	require.NoError(t, err)
+	require.NoError(t, deps.Store.UpsertSnapshot(ctx, note.ID, "<h1>Hi</h1>", "{}", "u1", "sha1"))
+
+	body := strings.NewReader(`{"body":"hello","note_commit_sha":"sha1","author_name":"Bob"}`)
+	req := httptest.NewRequest("POST", "/pub/r1/notes/docs/intro.md/comments", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	// The comment commit exists and reads back (author attribution verified at
+	// the gitcache layer in Task 3); assert the round-trip still works end-to-end.
+	get := httptest.NewRequest("GET", "/pub/r1/notes/docs/intro.md/comments", nil)
+	gr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(gr, get)
+	require.Contains(t, gr.Body.String(), "\"author_name\":\"Bob\"")
+}

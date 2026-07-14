@@ -260,15 +260,46 @@ func warnIfCredsUnusable(remoteURL, credJSON string, applied bool) {
 	}
 }
 
-// run executes a local-only git command (never touches the network),
-// bounded by localOpTimeout() so a wedged local process surfaces as an
-// explicit ErrGitOpTimedOut instead of hanging the caller indefinitely.
+// gitIdentityEnv returns the GIT_AUTHOR_*/GIT_COMMITTER_* environment
+// overrides for a git invocation. Empty author/committer name+email pairs
+// fall back to the fixed pubobs/pubobs@localhost identity every git
+// invocation used unconditionally before per-user identities existed — so
+// every call site that doesn't have (or care about) a real editor identity
+// keeps behaving exactly as before.
+func gitIdentityEnv(authorName, authorEmail, committerName, committerEmail string) []string {
+	if authorName == "" {
+		authorName, authorEmail = "pubobs", "pubobs@localhost"
+	}
+	if committerName == "" {
+		committerName, committerEmail = "pubobs", "pubobs@localhost"
+	}
+	return []string{
+		"GIT_AUTHOR_NAME=" + authorName,
+		"GIT_AUTHOR_EMAIL=" + authorEmail,
+		"GIT_COMMITTER_NAME=" + committerName,
+		"GIT_COMMITTER_EMAIL=" + committerEmail,
+		"GIT_TERMINAL_PROMPT=0",
+	}
+}
+
+// run executes a local-only git command (never touches the network) under
+// the fixed pubobs identity, bounded by localOpTimeout() so a wedged local
+// process surfaces as an explicit ErrGitOpTimedOut instead of hanging the
+// caller indefinitely.
 func (g *GitRunner) run(dir string, args ...string) (string, error) {
+	return g.runEnv(dir, gitIdentityEnv("", "", "", ""), args...)
+}
+
+// runEnv is run() with an explicit author/committer identity environment.
+// Used by AddCommitPush's commit step so a note edit's commit is attributed
+// to the editor rather than the fixed pubobs identity every other
+// local-only invocation uses.
+func (g *GitRunner) runEnv(dir string, identityEnv []string, args ...string) (string, error) {
 	timeout := g.localOpTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	out, err := g.runCtx(ctx, dir, args...)
+	out, err := g.runCtx(ctx, dir, identityEnv, args...)
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("%w after %s: git %s: %v", ErrGitOpTimedOut, timeout, args[0], err)
 	}
@@ -286,7 +317,7 @@ func (g *GitRunner) runNetwork(dir string, timeout time.Duration, args ...string
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	out, err := g.runCtx(ctx, dir, args...)
+	out, err := g.runCtx(ctx, dir, gitIdentityEnv("", "", "", ""), args...)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("%w after %s: git %s: %v", ErrGitOpTimedOut, timeout, args[0], err)
@@ -296,7 +327,7 @@ func (g *GitRunner) runNetwork(dir string, timeout time.Duration, args ...string
 	return out, nil
 }
 
-func (g *GitRunner) runCtx(ctx context.Context, dir string, args ...string) (string, error) {
+func (g *GitRunner) runCtx(ctx context.Context, dir string, identityEnv []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	// git clone/fetch/push over HTTP(S) delegate the actual network I/O to a
 	// `git-remote-http(s)` helper subprocess. When the context is cancelled,
@@ -310,13 +341,7 @@ func (g *GitRunner) runCtx(ctx context.Context, dir string, args ...string) (str
 	cmd.WaitDelay = 5 * time.Second
 	configureProcessGroup(cmd)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=pubobs",
-		"GIT_AUTHOR_EMAIL=pubobs@localhost",
-		"GIT_COMMITTER_NAME=pubobs",
-		"GIT_COMMITTER_EMAIL=pubobs@localhost",
-		"GIT_TERMINAL_PROMPT=0",
-	)
+	cmd.Env = append(os.Environ(), identityEnv...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -461,7 +486,14 @@ func (g *GitRunner) InitializeIfEmpty(dir, remoteURL, credJSON, branch string) e
 // small-and-fast size/timing profile as FetchReset — so this shares
 // fetchTimeout() rather than warranting its own budget the way the initial
 // Clone does.
-func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message string) (string, error) {
+//
+// pushCredJSON authenticates the push specifically (as opposed to whatever
+// credentials were used to clone/fetch dir originally) — see cache.go's
+// Sync/AppendComment for the clone-cred-vs-push-cred split this supports.
+// authorName/authorEmail/committerName/committerEmail set the commit's
+// identity; an empty authorName (or committerName) falls back to the fixed
+// pubobs/pubobs@localhost identity (see gitIdentityEnv).
+func (g *GitRunner) AddCommitPush(dir, remoteURL, pushCredJSON, branch, message, authorName, authorEmail, committerName, committerEmail string) (string, error) {
 	if _, err := g.run(dir, "add", "-A"); err != nil {
 		return "", err
 	}
@@ -469,10 +501,10 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message stri
 	if status == "" {
 		return g.run(dir, "rev-parse", "HEAD")
 	}
-	if _, err := g.run(dir, "commit", "-m", message); err != nil {
+	if _, err := g.runEnv(dir, gitIdentityEnv(authorName, authorEmail, committerName, committerEmail), "commit", "-m", message); err != nil {
 		return "", err
 	}
-	authedURL := credentialedURL(remoteURL, credJSON)
+	authedURL := credentialedURL(remoteURL, pushCredJSON)
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
 		return "", err
 	}

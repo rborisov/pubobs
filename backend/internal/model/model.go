@@ -46,6 +46,9 @@ type Repo struct {
 	MigrationStatus      string  // "idle" | "running" | "done" | "failed"
 	MigrationTotal       int
 	MigrationDone        int
+
+	OwnerUserID       *string // nil = no designated owner
+	StrictCredentials bool
 }
 
 type RepoAccess struct {

@@ -247,6 +247,30 @@ func TestHandleSync_deletedPathsRemovedFromGitAndDB(t *testing.T) {
 	require.Nil(t, gotNote, "deleted_paths must remove the note's DB row")
 }
 
+// TestHandleSync_strictRejectsWhenNoUserCredential verifies that when a repo
+// has strict_credentials enabled, an editor who has not configured their own
+// (user, repo) git credential is rejected with 403 rather than silently
+// falling back to the owner's service credential.
+func TestHandleSync_strictRejectsWhenNoUserCredential(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	deps.Store.UpsertUser(ctx, "u1", "u1@x.com", "User One")
+	deps.Store.CreateRepo(ctx, "r1", "R", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+	require.NoError(t, deps.Store.SetRepoStrictCredentials(ctx, "r1", true)) // strict, no user cred
+
+	body := strings.NewReader(`{"files":[{"path":"n.md","md_content":"# hi"}],"assets":[],"deleted_paths":[]}`)
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "u1@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "credential")
+}
+
 func mustGetRepo(t *testing.T, deps *api.Deps, repoID string) *model.Repo {
 	t.Helper()
 	repo, err := deps.Store.GetRepo(context.Background(), repoID)
