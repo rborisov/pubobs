@@ -132,4 +132,4 @@ Per-repo, not a global flip:
 
 - **Confirmed:** per-`(user, repo)` credential scope; owner cred for clone/reads and for all comment pushes; reject note-push when the editor has no credential; owner is transferable; git stays server-side.
 - **C1 (decided → B):** all comments push with the owner cred, commit author = the commenter (name + email); the committer is the owner. No commenter ever needs a git credential. Per-user credentials are enforced only for note-edit pushes.
-- **C2 (open):** legacy-mode fallback during migration (editor push falls back to owner cred until cutover) vs. strict-from-day-one. Default: **legacy mode with per-repo cutover.**
+- **C2 (decided → legacy + per-repo cutover):** each repo runs in legacy mode (editor pushes fall back to the owner cred, as today) until an admin explicitly cuts that repo over to strict per-user mode. No global flip; editors set up credentials before their repo is enforced.
