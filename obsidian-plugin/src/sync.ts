@@ -388,10 +388,14 @@ export class SyncManager {
       new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
     } catch (e) {
       const err = e as any;
-      if (err?.status === 403) {
+      const reason = e instanceof Error ? e.message : String(e);
+      // A 403 can mean either strict-mode "no git credential configured" or an
+      // ordinary authorization denial (e.g. the editor role was revoked). Only
+      // the former mentions a credential, so match the message too — otherwise
+      // show the real reason rather than a misleading "configure credential".
+      if (err?.status === 403 && /credential/i.test(reason)) {
         new Notice(`PubObs: configure your git credential for "${mapping.repoName}" in Settings before publishing.`, 10000);
       } else {
-        const reason = e instanceof Error ? e.message : String(e);
         console.error('[PubObs] sync failed:', e);
         new Notice(`PubObs: sync failed — ${reason}`, 10000);
       }
