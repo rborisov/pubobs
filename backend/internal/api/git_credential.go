@@ -40,6 +40,46 @@ func handleSetGitCredential(deps *Deps) http.HandlerFunc {
 	}
 }
 
+func handleVerifyGitCredential(deps *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.ClaimsFromContext(r.Context())
+		repoID := chi.URLParam(r, "id")
+		if err := requireRepoRole(r.Context(), deps, claims, repoID, "editor"); err != nil {
+			writeError(w, http.StatusForbidden, "editor role required")
+			return
+		}
+		repo, err := deps.Store.GetRepo(r.Context(), repoID)
+		if err != nil || repo == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		enc, ok, err := deps.Store.GetUserCredentialSecret(r.Context(), repoID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "lookup failed")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "no credential configured")
+			return
+		}
+		cred, err := auth.DecryptCreds(deps.Config.SecretKey, enc)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "decrypt failed")
+			return
+		}
+		status, errMsg := "verified", ""
+		if verr := deps.Cache.VerifyRemoteCredential(repo.RemoteURL, cred); verr != nil {
+			status = "auth_failed"
+			errMsg = "could not authenticate to the remote" // never echo the token/raw error verbatim
+		}
+		if serr := deps.Store.SetUserCredentialVerification(r.Context(), repoID, claims.UserID, status, errMsg); serr != nil {
+			writeError(w, http.StatusInternalServerError, "status write failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": status})
+	}
+}
+
 func handleDeleteGitCredential(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
