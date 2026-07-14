@@ -173,18 +173,27 @@ export class BackendClient {
   }
 
   async setGitCredential(
-    repoId: string, opts: { username: string; token: string; gitName?: string; gitEmail?: string },
+    repoId: string, opts: { username: string; token: string },
   ): Promise<void> {
+    // Commit name/email are derived from the account server-side, so they
+    // are not sent from the plugin.
     await this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/git-credential`,
       method: 'PUT',
       contentType: 'application/json',
-      body: JSON.stringify({
-        username: opts.username,
-        token: opts.token,
-        git_name: opts.gitName ?? '',
-        git_email: opts.gitEmail ?? '',
-      }),
+      body: JSON.stringify({ username: opts.username, token: opts.token }),
+    });
+  }
+
+  // getGitCredentialStatus reports whether the caller has a credential
+  // configured for this repo and its last verification status. The token
+  // itself is never returned by the backend.
+  async getGitCredentialStatus(
+    repoId: string,
+  ): Promise<{ configured: boolean; verify_status: string }> {
+    return this.request<{ configured: boolean; verify_status: string }>({
+      url: `${this.baseUrl}/api/repos/${repoId}/git-credential`,
+      method: 'GET',
     });
   }
 

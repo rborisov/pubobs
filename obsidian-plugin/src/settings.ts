@@ -87,95 +87,16 @@ export class PubObsSettingTab extends PluginSettingTab {
             suggest.onSelect(async (folder) => save(folder.path));
           });
 
-        // Git credential entry for this repo. The token is held only in this
-        // closure's local variables and submitted directly to the backend —
-        // it is never written to this.plugin.settings / saveData, and the
-        // backend never returns a saved token to re-render here.
-        let credUsername = '';
-        let credToken = '';
-        let credGitName = '';
-        let credGitEmail = '';
-
-        containerEl.createEl('h4', { text: `Git credential — ${mapping.repoName}` });
-
-        new Setting(containerEl)
-          .setName('Username')
-          .addText(text =>
-            text
-              .setPlaceholder('Git username')
-              .onChange(v => { credUsername = v.trim(); })
-          );
-
-        new Setting(containerEl)
-          .setName('Token')
-          .addText(text => {
-            text
-              .setPlaceholder('Personal access token')
-              .onChange(v => { credToken = v.trim(); });
-            text.inputEl.type = 'password';
-          });
-
-        new Setting(containerEl)
-          .setName('Git name (optional)')
-          .addText(text =>
-            text
-              .setPlaceholder('Display name for commits')
-              .onChange(v => { credGitName = v.trim(); })
-          );
-
-        new Setting(containerEl)
-          .setName('Git email (optional)')
-          .addText(text =>
-            text
-              .setPlaceholder('Email for commits')
-              .onChange(v => { credGitEmail = v.trim(); })
-          );
-
-        new Setting(containerEl)
-          .setDesc('Credentials are stored securely on the backend and never saved in Obsidian settings.')
-          .addButton(btn =>
-            btn
-              .setButtonText('Save & verify')
-              .setCta()
-              .onClick(async () => {
-                if (!credUsername || !credToken) {
-                  new Notice('Enter a username and token first');
-                  return;
-                }
-                try {
-                  await this.plugin.client.setGitCredential(repoId, {
-                    username: credUsername,
-                    token: credToken,
-                    gitName: credGitName || undefined,
-                    gitEmail: credGitEmail || undefined,
-                  });
-                  const result = await this.plugin.client.verifyGitCredential(repoId);
-                  if (result.status === 'verified') {
-                    new Notice('Git credential saved — read access verified');
-                  } else if (result.status === 'auth_failed') {
-                    new Notice('Git credential saved — authentication failed');
-                  } else {
-                    new Notice(`Git credential saved — status: ${result.status}`);
-                  }
-                } catch (e: unknown) {
-                  new Notice('Failed: ' + (e instanceof Error ? e.message : String(e)));
-                }
-              })
-          )
-          .addButton(btn =>
-            btn
-              .setButtonText('Remove credential')
-              .setWarning()
-              .onClick(async () => {
-                try {
-                  await this.plugin.client.deleteGitCredential(repoId);
-                  new Notice('Git credential removed');
-                } catch (e: unknown) {
-                  new Notice('Failed: ' + (e instanceof Error ? e.message : String(e)));
-                }
-              })
-          );
       }
+
+      // Git credentials are grouped by git provider (host), not by repo:
+      // one token typically covers every repo on the same host. Rendered
+      // asynchronously because it needs each repo's remote URL from the
+      // backend. Tokens live only in the render closure — never in
+      // this.plugin.settings / saveData, and the backend never returns a
+      // saved token.
+      const gitCredsEl = containerEl.createDiv();
+      void this.renderGitCredentials(gitCredsEl);
     }
 
     new Setting(containerEl)
@@ -191,5 +112,151 @@ export class PubObsSettingTab extends PluginSettingTab {
           }
         })
       );
+  }
+
+  // Render one credential entry per git provider (host), covering every
+  // mapped repo on that host. Async because it needs each repo's remote URL.
+  private async renderGitCredentials(el: HTMLElement): Promise<void> {
+    el.empty();
+    const mappings = this.plugin.settings.repoMappings;
+    const mappedIds = Object.keys(mappings);
+    if (mappedIds.length === 0) return;
+
+    let repos: RepoInfo[];
+    try {
+      repos = await this.plugin.client.listRepos();
+    } catch {
+      return; // offline / not authenticated — skip silently
+    }
+
+    const mapped = new Set(mappedIds);
+    const byHost = new Map<string, { repoId: string; repoName: string }[]>();
+    for (const r of repos) {
+      if (!mapped.has(r.id)) continue;
+      const host = hostOf(r.remote_url);
+      const list = byHost.get(host) ?? [];
+      list.push({ repoId: r.id, repoName: mappings[r.id].repoName });
+      byHost.set(host, list);
+    }
+    if (byHost.size === 0) return;
+
+    el.createEl('h3', { text: 'Git credentials' });
+    el.createEl('p', {
+      text: 'One credential per git provider — it applies to every mapped repo on that host.',
+      cls: 'setting-item-description',
+    });
+    for (const [host, entries] of byHost) {
+      this.renderHostCredential(el, host, entries);
+    }
+  }
+
+  private renderHostCredential(
+    el: HTMLElement, host: string, entries: { repoId: string; repoName: string }[],
+  ): void {
+    let username = '';
+    let token = '';
+    const repoList = entries.map(e => e.repoName).join(', ');
+
+    el.createEl('h4', { text: `Git credential — ${host}` });
+    const statusEl = el.createEl('p', { text: 'Checking…', cls: 'setting-item-description' });
+
+    const renderStatus = (statuses: { configured: boolean; verify_status: string }[]) => {
+      const configured = statuses.filter(s => s.configured).length;
+      const verified = statuses.filter(s => s.verify_status === 'verified').length;
+      if (configured === 0) {
+        statusEl.setText(`Not set · applies to: ${repoList}`);
+      } else {
+        statusEl.setText(
+          `Credential set for ${configured}/${entries.length} repo(s) · ` +
+          `write-verified ${verified}/${entries.length} · applies to: ${repoList}`,
+        );
+      }
+    };
+    void Promise.all(
+      entries.map(e =>
+        this.plugin.client
+          .getGitCredentialStatus(e.repoId)
+          .catch(() => ({ configured: false, verify_status: '' })),
+      ),
+    ).then(renderStatus);
+
+    new Setting(el)
+      .setName('Username')
+      .addText(text =>
+        text.setPlaceholder('Git username').onChange(v => { username = v.trim(); }),
+      );
+
+    new Setting(el)
+      .setName('Token')
+      .addText(text => {
+        text.setPlaceholder('Personal access token').onChange(v => { token = v.trim(); });
+        text.inputEl.type = 'password';
+      });
+
+    new Setting(el)
+      .setDesc('Stored securely on the backend and never saved in Obsidian settings.')
+      .addButton(btn =>
+        btn
+          .setButtonText('Save & verify')
+          .setCta()
+          .onClick(async () => {
+            if (!username || !token) {
+              new Notice('Enter a username and token first');
+              return;
+            }
+            try {
+              let verified = 0;
+              const failed: string[] = [];
+              for (const e of entries) {
+                await this.plugin.client.setGitCredential(e.repoId, { username, token });
+                const result = await this.plugin.client.verifyGitCredential(e.repoId);
+                if (result.status === 'verified') verified++;
+                else failed.push(e.repoName);
+              }
+              if (failed.length === 0) {
+                new Notice(`Credential saved — write access verified for all ${entries.length} repo(s) on ${host}`);
+              } else {
+                new Notice(`Credential saved — write access failed for: ${failed.join(', ')}`);
+              }
+              renderStatus(
+                entries.map((_, i) => ({
+                  configured: true,
+                  verify_status: i < verified ? 'verified' : 'auth_failed',
+                })),
+              );
+            } catch (e: unknown) {
+              new Notice('Failed: ' + (e instanceof Error ? e.message : String(e)));
+            }
+          }),
+      )
+      .addButton(btn =>
+        btn
+          .setButtonText('Remove')
+          .setWarning()
+          .onClick(async () => {
+            try {
+              for (const e of entries) {
+                await this.plugin.client.deleteGitCredential(e.repoId);
+              }
+              new Notice(`Credential removed for ${host}`);
+              renderStatus(entries.map(() => ({ configured: false, verify_status: '' })));
+            } catch (e: unknown) {
+              new Notice('Failed: ' + (e instanceof Error ? e.message : String(e)));
+            }
+          }),
+      );
+  }
+}
+
+// hostOf extracts the provider host from a git remote URL. Handles both
+// https (`https://host/path`) and scp-style ssh (`git@host:path`) remotes,
+// falling back to the raw URL if it can't be parsed so distinct remotes are
+// never merged under one blank key.
+function hostOf(remoteUrl: string): string {
+  try {
+    return new URL(remoteUrl).host;
+  } catch {
+    const m = remoteUrl.match(/@([^:/]+)[:/]/);
+    return m ? m[1] : remoteUrl;
   }
 }

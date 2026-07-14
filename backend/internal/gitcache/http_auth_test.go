@@ -419,6 +419,42 @@ func TestAddCommitPush_pushUsesPushCredNotCloneCred(t *testing.T) {
 	require.Len(t, sha, 40)
 }
 
+// TestVerifyWriteCredential_checksPushAccess proves the credential-verify path
+// checks WRITE (push) access, not just read: it clones with the owner service
+// credential and then dry-run-pushes with the user's credential. A user
+// credential that can push verifies clean; a bad user credential is reported
+// as ErrGitAuthFailed even though the owner credential used for the clone is
+// valid — which is only possible if the dry-run push (not the clone) is what
+// the user credential is applied to.
+func TestVerifyWriteCredential_checksPushAccess(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	// git-http-backend only serves receive-pack when the remote opts in
+	// (http.receivepack) or the CGI sets REMOTE_USER; the test server does
+	// neither by default, so enable it explicitly to model a push-accepting
+	// remote deterministically.
+	require.NoError(t, exec.Command("git", "-C", bareURL, "config", "http.receivepack", "true").Run())
+
+	srv := newAuthRequiredGitServer(t, bareURL, "validuser", "validpass")
+	repoURL := srv.URL + "/remote.git"
+
+	validCred := `{"username":"validuser","password":"validpass"}`
+	wrongCred := `{"username":"validuser","password":"wrong-password"}`
+
+	cache := gitcache.NewCache(t.TempDir())
+	repo := &model.Repo{ID: "verify-write", RemoteURL: repoURL, DefaultBranch: "main"}
+
+	// A user credential accepted by the remote must verify clean.
+	require.NoError(t, cache.VerifyWriteCredential(repo, validCred, validCred))
+
+	// A bad user credential must fail as an auth error even though the owner
+	// credential used for the clone is valid — proving the user credential is
+	// applied to the push, not the clone.
+	err := cache.VerifyWriteCredential(repo, validCred, wrongCred)
+	require.Error(t, err)
+	require.ErrorIs(t, err, gitcache.ErrGitAuthFailed)
+}
+
 // TestGetOrClone_TimedOutFirstCloneLeavesNothingAtLivePath is the regression
 // test for the 494ca9da self-reinforcing-loop incident: a clone that times
 // out partway through must not leave anything (partial or otherwise) at the

@@ -399,6 +399,18 @@ func (g *GitRunner) LsRemote(remoteURL, credJSON string) error {
 	return err
 }
 
+// PushDryRun verifies WRITE access with credJSON. A dry-run push begins with
+// the git-receive-pack reference advertisement, which the common hosts
+// (GitHub, GitLab, Gitea, Bitbucket) gate on write permission — so a
+// read-only credential fails here even though no objects are transferred and
+// no ref is updated. dir must be an existing clone with a HEAD. Auth or
+// permission rejection is classified as ErrGitAuthFailed by classifyGitError.
+func (g *GitRunner) PushDryRun(dir, remoteURL, credJSON, branch string) error {
+	authedURL := credentialedURL(remoteURL, credJSON)
+	_, err := g.runNetwork(dir, g.fetchTimeout(), "push", "--dry-run", authedURL, "HEAD:"+branch)
+	return err
+}
+
 // dubiousOwnershipMarker is the substring git (2.35.2+) prints when it
 // refuses to operate on a repository directory owned by a different user
 // than the process's effective UID ("detected dubious ownership in

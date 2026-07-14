@@ -575,3 +575,24 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, cloneCredJS
 func (c *Cache) VerifyRemoteCredential(remoteURL, credJSON string) error {
 	return c.git.LsRemote(remoteURL, credJSON)
 }
+
+// VerifyWriteCredential checks that userCredJSON can push to the repo. It
+// ensures a local clone exists (fetching with the owner service credential),
+// then dry-run-pushes HEAD with the user's credential. A read-only credential
+// fails at the receive-pack advertisement. Operations are serialized through
+// the per-repo lock, like Sync.
+func (c *Cache) VerifyWriteCredential(repo *model.Repo, ownerCredJSON, userCredJSON string) error {
+	lock := c.repoLock(repo.ID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	dir, err := c.getOrClone(repo, ownerCredJSON)
+	if err != nil {
+		return err
+	}
+	branch := repo.DefaultBranch
+	if branch == "" {
+		branch = "main"
+	}
+	return c.git.PushDryRun(dir, repo.RemoteURL, userCredJSON, branch)
+}
