@@ -292,6 +292,7 @@ func TestAdminSetRepoOwner(t *testing.T) {
 	deps.Store.SetInstanceAdmin(ctx, "admin1", true)
 	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "User Two")
 	repo, _ := deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+	require.NoError(t, deps.Store.GrantAccess(ctx, "ga1", repo.ID, "user", "u2", "admin"))
 
 	body := strings.NewReader(`{"owner_user_id":"u2"}`)
 	req := httptest.NewRequest("POST", "/api/admin/repos/"+repo.ID+"/owner", body)
@@ -378,4 +379,52 @@ func TestAdminListRepoAccess_includesGitCredentialStatus(t *testing.T) {
 	// Assert git_credential status
 	require.Equal(t, "verified", u1Entry["git_credential"], "u1 should have verified credential")
 	require.Equal(t, "none", u2Entry["git_credential"], "u2 should have no credential")
+}
+
+func TestAdminSetRepoStrictCredentials(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+
+	body := strings.NewReader(`{"strict":true}`)
+	req := httptest.NewRequest("PUT", "/api/admin/repos/r1/strict-credentials", body)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code, rr.Body.String())
+	repo, _ := deps.Store.GetRepo(ctx, "r1")
+	require.True(t, repo.StrictCredentials)
+}
+
+func TestListRepos_includesOwnerAndStrict(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+	deps.Store.SetRepoOwner(ctx, "r1", "admin1")
+	deps.Store.SetRepoStrictCredentials(ctx, "r1", true)
+
+	req := httptest.NewRequest("GET", "/api/repos", nil)
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"owner_user_id":"admin1"`)
+	require.Contains(t, rr.Body.String(), `"strict_credentials":true`)
+}
+
+func TestAdminSetRepoOwner_rejectsNonAdminTarget(t *testing.T) {
+	deps := newTestDeps(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "admin1", "admin@x.com", "Admin")
+	deps.Store.UpsertUser(ctx, "u2", "u2@x.com", "Plain") // not an admin
+	deps.Store.CreateRepo(ctx, "r1", "R", "https://x/r1.git", "", "main")
+
+	req := httptest.NewRequest("POST", "/api/admin/repos/r1/owner", strings.NewReader(`{"owner_user_id":"u2"}`))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "admin1", "admin@x.com", true))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "admin")
 }

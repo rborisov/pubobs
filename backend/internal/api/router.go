@@ -104,6 +104,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Put("/api/admin/repos/{id}", handleAdminUpdateRepo(deps))
 		r.Delete("/api/admin/repos/{id}", handleAdminDeleteRepo(deps))
 		r.Put("/api/admin/repos/{id}/guest-access", handleAdminSetRepoGuestAccess(deps))
+		r.Put("/api/admin/repos/{id}/strict-credentials", handleAdminSetRepoStrictCredentials(deps))
 		r.Post("/api/admin/repos/{id}/import", handleAdminImportRepo(deps))
 		r.Get("/api/admin/repos/{id}/access", handleAdminListRepoAccess(deps))
 		r.Post("/api/admin/repos/{id}/access", handleAdminGrantAccess(deps))

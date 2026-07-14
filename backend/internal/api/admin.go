@@ -293,7 +293,10 @@ func handleAdminListRepoAccess(deps *Deps) http.HandlerFunc {
 					gitCred = status
 				}
 			}
-			out[i] = accessResp{e.ID, e.RepoID, e.PrincipalType, e.PrincipalID, e.Role, gitCred}
+			out[i] = accessResp{
+				ID: e.ID, RepoID: e.RepoID, PrincipalType: e.PrincipalType,
+				PrincipalID: e.PrincipalID, Role: e.Role, GitCredential: gitCred,
+			}
 		}
 		writeJSON(w, http.StatusOK, out)
 	}

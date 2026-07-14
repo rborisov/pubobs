@@ -26,8 +26,19 @@ func handleAdminSetRepoOwner(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "owner_user_id required")
 			return
 		}
-		if u, err := deps.Store.GetUserByID(r.Context(), body.OwnerUserID); err != nil || u == nil {
+		u, err := deps.Store.GetUserByID(r.Context(), body.OwnerUserID)
+		if err != nil || u == nil {
 			writeError(w, http.StatusBadRequest, "unknown user")
+			return
+		}
+		targetAdmin := u.IsInstanceAdmin || u.IsAdmin
+		if !targetAdmin {
+			if role, _ := deps.Store.GetUserRole(r.Context(), body.OwnerUserID, repoID); role == "admin" {
+				targetAdmin = true
+			}
+		}
+		if !targetAdmin {
+			writeError(w, http.StatusBadRequest, "owner must be an admin of the repo")
 			return
 		}
 		if err := deps.Store.SetRepoOwner(r.Context(), repoID, body.OwnerUserID); err != nil {
