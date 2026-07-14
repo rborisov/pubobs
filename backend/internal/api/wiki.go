@@ -205,7 +205,7 @@ func serveAddComment(w http.ResponseWriter, r *http.Request, deps *Deps, claims 
 		return
 	}
 
-	if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, notePath, user.Name, user.Email, body.Body, body.NoteCommitSHA); err != nil {
+	if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, credJSON, notePath, user.Name, user.Email, body.Body, body.NoteCommitSHA); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save comment")
 		return
 	}

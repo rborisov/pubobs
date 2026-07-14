@@ -98,7 +98,34 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		user, _ := deps.Store.GetUserByID(r.Context(), claims.UserID)
 		commitMsg := fmt.Sprintf("pubobs: sync %s by %s", time.Now().UTC().Format(time.RFC3339), user.Email)
 
-		sha, err := deps.Cache.Sync(r.Context(), repo, credJSON, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg)
+		// Owner service credential (clone/reads + fallback push).
+		ownerCred := credJSON
+
+		// Push credential = the syncing user's own (user, repo) credential.
+		pushCred := ""
+		encUserCred, ok, uerr := deps.Store.GetUserCredentialSecret(r.Context(), repoID, claims.UserID)
+		if uerr != nil {
+			writeError(w, http.StatusInternalServerError, "credential lookup failed")
+			return
+		}
+		if ok {
+			if pushCred, err = auth.DecryptCreds(deps.Config.SecretKey, encUserCred); err != nil {
+				writeError(w, http.StatusInternalServerError, "credential decrypt failed")
+				return
+			}
+		} else if repo.StrictCredentials {
+			writeError(w, http.StatusForbidden, "configure your git credential for this repo before publishing")
+			return
+		}
+		// Legacy mode (not strict) with no user cred: pushCred stays "" → Cache.Sync
+		// falls back to the owner cred.
+
+		authorName := user.Name
+		authorEmail := user.Email
+		// (Phase 2 lets the user set git_name/git_email explicitly; until then use
+		// their account identity.)
+
+		sha, err := deps.Cache.Sync(r.Context(), repo, ownerCred, pushCred, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg, authorName, authorEmail)
 		if err != nil {
 			if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "rejected") {
 				writeError(w, http.StatusConflict, "push rejected: pull first, then sync")

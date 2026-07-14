@@ -611,7 +611,7 @@ func handlePubPostComment(deps *Deps) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "cred decrypt failed")
 			return
 		}
-		if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, notePath, name, email, body.Body, body.NoteCommitSHA); err != nil {
+		if err := deps.Cache.AppendComment(r.Context(), repo, credJSON, credJSON, notePath, name, email, body.Body, body.NoteCommitSHA); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to save comment")
 			return
 		}
