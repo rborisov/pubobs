@@ -71,7 +71,7 @@ CREATE TABLE repo_user_credentials (
 - `getOrClone` and all fetch/reset use the **owner's** service credential (unchanged source, just re-labeled). Readers and editors pull from the server; they never present a git credential.
 
 ### Comments — `AppendComment` (`wiki.go`, `pub.go`)
-- Always push with the **owner's** service credential; set commit author to the commenter's name (anonymous display name, or the logged-in account's name). No per-user git credential required to comment. (Open item C1 below if logged-in editors should instead use their own cred.)
+- **Always** push with the **owner's** service credential (decided — C1=B), for every commenter: anonymous, commentator, or editor. Set the commit **author** (name + email) to the commenter — anonymous display name (no/placeholder email), or the logged-in account's name + email — while the committer is the owner. No per-user git credential is ever required to comment, and author attribution stays correct (incl. GitHub, when the author email matches).
 
 ### Access verification (#3)
 - `verifyCredential(repoID, userID)`: run `git ls-remote <authedURL>` (read-check) and/or a dry-run push against the remote with the user's credential; store `verify_status` + `verified_at` + `verify_error`.
@@ -131,5 +131,5 @@ Per-repo, not a global flip:
 ## Open / confirmed decisions
 
 - **Confirmed:** per-`(user, repo)` credential scope; owner cred for clone/reads and for all comment pushes; reject note-push when the editor has no credential; owner is transferable; git stays server-side.
-- **C1 (open):** should a *logged-in editor's* comment push use *their* credential (author + committer = them) instead of the owner cred? Default in this doc: **owner cred for all comments** (simplest, never blocks commenting). Change if you want editor comments fully self-attributed at the committer level.
+- **C1 (decided → B):** all comments push with the owner cred, commit author = the commenter (name + email); the committer is the owner. No commenter ever needs a git credential. Per-user credentials are enforced only for note-edit pushes.
 - **C2 (open):** legacy-mode fallback during migration (editor push falls back to owner cred until cutover) vs. strict-from-day-one. Default: **legacy mode with per-repo cutover.**
