@@ -27,7 +27,8 @@ func (s *Store) GetRepo(ctx context.Context, id string) (*model.Repo, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
 		       local_path, cloned_at, last_used_at, created_at, allow_guest,
-		       storage_destination_id, migration_status, migration_total, migration_done
+		       storage_destination_id, migration_status, migration_total, migration_done,
+		       owner_user_id, strict_credentials
 		FROM repos WHERE id=?`, id)
 	return scanRepo(row)
 }
@@ -36,7 +37,8 @@ func (s *Store) ListRepos(ctx context.Context) ([]*model.Repo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
 		       local_path, cloned_at, last_used_at, created_at, allow_guest,
-		       storage_destination_id, migration_status, migration_total, migration_done
+		       storage_destination_id, migration_status, migration_total, migration_done,
+		       owner_user_id, strict_credentials
 		FROM repos ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -68,7 +70,8 @@ func (s *Store) getReposByIDs(ctx context.Context, ids []string) ([]*model.Repo,
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
 		       local_path, cloned_at, last_used_at, created_at, allow_guest,
-		       storage_destination_id, migration_status, migration_total, migration_done
+		       storage_destination_id, migration_status, migration_total, migration_done,
+		       owner_user_id, strict_credentials
 		FROM repos WHERE id IN (%s) ORDER BY name`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return nil, err
@@ -129,7 +132,8 @@ func (s *Store) ListStaleRepos(ctx context.Context, cutoff time.Time) ([]*model.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, remote_url, encrypted_creds, default_branch,
 		       local_path, cloned_at, last_used_at, created_at, allow_guest,
-		       storage_destination_id, migration_status, migration_total, migration_done
+		       storage_destination_id, migration_status, migration_total, migration_done,
+		       owner_user_id, strict_credentials
 		FROM repos WHERE local_path IS NOT NULL AND last_used_at < ?`, cutoff)
 	if err != nil {
 		return nil, err
@@ -152,10 +156,13 @@ func scanRepo(row scanner) (*model.Repo, error) {
 	var clonedAt, lastUsedAt sql.NullTime
 	var allowGuest int
 	var destID sql.NullString
+	var ownerUserID sql.NullString
+	var strictCredentials int
 	err := row.Scan(
 		&r.ID, &r.Name, &r.RemoteURL, &r.EncryptedCreds, &r.DefaultBranch,
 		&localPath, &clonedAt, &lastUsedAt, &r.CreatedAt, &allowGuest,
 		&destID, &r.MigrationStatus, &r.MigrationTotal, &r.MigrationDone,
+		&ownerUserID, &strictCredentials,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -176,6 +183,10 @@ func scanRepo(row scanner) (*model.Repo, error) {
 	if destID.Valid {
 		r.StorageDestinationID = &destID.String
 	}
+	if ownerUserID.Valid {
+		r.OwnerUserID = &ownerUserID.String
+	}
+	r.StrictCredentials = strictCredentials != 0
 	return &r, nil
 }
 
