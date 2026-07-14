@@ -294,15 +294,23 @@ func clearStaleGitLocks(gitDir string) error {
 }
 
 // Sync writes files to the cache, removes deletedPaths, commits, and pushes.
-// credJSON is the decrypted credentials string (may be empty for public repos).
-// Returns the commit SHA.
-func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, files []SyncFile, assets []SyncAsset, deletedPaths []string, commitMsg string) (string, error) {
+// cloneCredJSON authenticates the clone/fetch (the repo owner's stored
+// credentials); pushCredJSON authenticates the push specifically and falls
+// back to cloneCredJSON when empty. Either may be empty for public repos.
+// The commit is authored and committed as authorName/authorEmail (the
+// editor) — author == committer for a note-edit sync. Returns the commit
+// SHA.
+func (c *Cache) Sync(ctx context.Context, repo *model.Repo, cloneCredJSON, pushCredJSON string, files []SyncFile, assets []SyncAsset, deletedPaths []string, commitMsg, authorName, authorEmail string) (string, error) {
 	syncStart := time.Now()
 	lock := c.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	dir, err := c.getOrClone(repo, credJSON)
+	if pushCredJSON == "" {
+		pushCredJSON = cloneCredJSON
+	}
+
+	dir, err := c.getOrClone(repo, cloneCredJSON)
 	if err != nil {
 		return "", err
 	}
@@ -353,7 +361,7 @@ func (c *Cache) Sync(ctx context.Context, repo *model.Repo, credJSON string, fil
 	}
 
 	commitStart := time.Now()
-	sha, err := c.git.AddCommitPush(dir, repo.RemoteURL, credJSON, repo.DefaultBranch, commitMsg)
+	sha, err := c.git.AddCommitPush(dir, repo.RemoteURL, pushCredJSON, repo.DefaultBranch, commitMsg, authorName, authorEmail, authorName, authorEmail)
 	c.recordGitOpResult(repo.ID, err)
 	if err != nil {
 		log.Printf("gitcache: sync %s: commit+push failed after %s: %v", repo.ID, time.Since(commitStart), err)
@@ -513,13 +521,23 @@ func (c *Cache) CommentCounts(repoID string) (map[string]int, error) {
 
 // AppendComment appends a comment to the note's companion comments file,
 // commits the change, and pushes to the remote.
+// cloneCredJSON authenticates the clone/fetch (the repo owner's stored
+// credentials); pushCredJSON authenticates the push specifically and falls
+// back to cloneCredJSON when empty. The commit is authored as
+// authorName/authorEmail (the commenter) but committed as pubobs, since a
+// comment's committer identity (unlike a note edit's) isn't meant to read as
+// "authored" by the commenter.
 // noteCommitSHA is the git_commit_sha of the note at the time of posting.
-func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, notePath, authorName, authorEmail, body, noteCommitSHA string) error {
+func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, cloneCredJSON, pushCredJSON, notePath, authorName, authorEmail, body, noteCommitSHA string) error {
 	lock := c.repoLock(repo.ID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	dir, err := c.getOrClone(repo, credJSON)
+	if pushCredJSON == "" {
+		pushCredJSON = cloneCredJSON
+	}
+
+	dir, err := c.getOrClone(repo, cloneCredJSON)
 	if err != nil {
 		return err
 	}
@@ -547,8 +565,8 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, credJSON, n
 		return err
 	}
 
-	_, err = c.git.AddCommitPush(dir, repo.RemoteURL, credJSON, repo.DefaultBranch,
-		fmt.Sprintf("pubobs: comment on %s", notePath))
+	_, err = c.git.AddCommitPush(dir, repo.RemoteURL, pushCredJSON, repo.DefaultBranch,
+		fmt.Sprintf("pubobs: comment on %s", notePath), authorName, authorEmail, "pubobs", "pubobs@localhost")
 	c.recordGitOpResult(repo.ID, err)
 	return err
 }
