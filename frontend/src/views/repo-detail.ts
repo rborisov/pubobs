@@ -1,6 +1,7 @@
 import {
   listRepos, listRepoAccess, grantAccess, revokeAccess, listUsers,
   updateRepo, deleteRepo, listStorageDestinations, assignRepoStorage,
+  setRepoOwner, setRepoStrictCredentials,
   type Repo, type RepoAccess, type User, type StorageDestination,
 } from '../api';
 import { navigate } from '../router';
@@ -169,6 +170,105 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
   renderStorage();
   if (repo.migration_status === 'running') void pollMigration();
 
+  const ownerSection = document.createElement('div');
+  ownerSection.style.cssText = 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:24px;font-size:0.875rem';
+  wrap.appendChild(ownerSection);
+
+  const renderOwner = (): void => {
+    ownerSection.innerHTML = '';
+
+    const ownerUser = repo.owner_user_id ? users.find(u => u.id === repo.owner_user_id) : undefined;
+    const ownerRow = document.createElement('div');
+    ownerRow.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:6px 16px;color:#475569;margin-bottom:12px';
+    ownerRow.innerHTML = `<span style="font-weight:600">Owner</span><span>${esc(ownerUser?.email ?? '—')}</span>`;
+    ownerSection.appendChild(ownerRow);
+
+    const adminUsers = users.filter(u => u.is_instance_admin || u.is_admin);
+    const transferRow = document.createElement('div');
+    transferRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+
+    const transferLabel = document.createElement('span');
+    transferLabel.style.cssText = 'font-size:0.8rem;color:#475569';
+    transferLabel.textContent = 'Transfer ownership';
+    transferRow.appendChild(transferLabel);
+
+    const select = document.createElement('select');
+    select.style.cssText = 'padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.875rem';
+    for (const u of adminUsers) {
+      const opt = document.createElement('option');
+      opt.value = u.id;
+      opt.textContent = u.email;
+      select.appendChild(opt);
+    }
+    if (repo.owner_user_id) select.value = repo.owner_user_id;
+    transferRow.appendChild(select);
+
+    const transferBtn = mkBtn('Transfer', 'ghost');
+    if (adminUsers.length === 0) transferBtn.disabled = true;
+    transferRow.appendChild(transferBtn);
+    ownerSection.appendChild(transferRow);
+
+    const transferErr = document.createElement('div');
+    transferErr.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin-top:8px';
+    ownerSection.appendChild(transferErr);
+
+    transferBtn.addEventListener('click', async () => {
+      const selected = select.value;
+      if (!selected) return;
+      transferErr.style.display = 'none';
+      transferBtn.disabled = true;
+      try {
+        await setRepoOwner(repo.id, selected);
+        const repos = await listRepos();
+        const fresh = repos.find(r => r.id === repo.id);
+        if (fresh) Object.assign(repo, fresh);
+        renderOwner();
+      } catch (e: unknown) {
+        transferErr.textContent = e instanceof Error ? e.message : String(e);
+        transferErr.style.display = 'block';
+        transferBtn.disabled = false;
+      }
+    });
+
+    const strictRow = document.createElement('label');
+    strictRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:16px;font-weight:600;color:#475569;cursor:pointer';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !!repo.strict_credentials;
+    strictRow.appendChild(checkbox);
+    const strictLabel = document.createElement('span');
+    strictLabel.textContent = "Require each editor's own git credential (strict)";
+    strictRow.appendChild(strictLabel);
+    ownerSection.appendChild(strictRow);
+
+    const strictNote = document.createElement('div');
+    strictNote.style.cssText = 'color:#64748b;font-size:0.8rem;margin-top:4px';
+    strictNote.textContent = "Editors must configure a git credential in the plugin before they can publish once strict mode is on.";
+    ownerSection.appendChild(strictNote);
+
+    const strictErr = document.createElement('div');
+    strictErr.style.cssText = 'color:#c00;font-size:0.8rem;display:none;margin-top:8px';
+    ownerSection.appendChild(strictErr);
+
+    checkbox.addEventListener('change', async () => {
+      const newVal = checkbox.checked;
+      checkbox.disabled = true;
+      strictErr.style.display = 'none';
+      try {
+        await setRepoStrictCredentials(repo.id, newVal);
+        repo.strict_credentials = newVal;
+      } catch (e: unknown) {
+        checkbox.checked = !newVal;
+        strictErr.textContent = e instanceof Error ? e.message : String(e);
+        strictErr.style.display = 'block';
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+  };
+
+  renderOwner();
+
   const editWrap = document.createElement('div');
   wrap.appendChild(editWrap);
 
@@ -219,7 +319,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
       accessSection.appendChild(p);
     } else {
       const table = document.createElement('table');
-      table.innerHTML = `<thead><tr><th>Type</th><th>User</th><th>Role</th><th></th></tr></thead>`;
+      table.innerHTML = `<thead><tr><th>Type</th><th>User</th><th>Role</th><th>Git credential</th><th></th></tr></thead>`;
       const tbody = document.createElement('tbody');
       for (const entry of list) {
         const user = users.find(u => u.id === entry.principal_id);
@@ -228,6 +328,7 @@ function render(wrap: HTMLElement, repo: Repo, accessList: RepoAccess[], users: 
           <td>${esc(entry.principal_type)}</td>
           <td>${esc(user?.email ?? entry.principal_id)}</td>
           <td>${esc(entry.role)}</td>
+          <td>${entry.principal_type === 'user' ? esc(credentialStatusLabel(entry.git_credential)) : ''}</td>
           <td></td>
         `;
         const revokeBtn = mkBtn('Revoke', 'danger-sm');
@@ -341,6 +442,15 @@ function mkBtn(text: string, variant: 'ghost' | 'danger' | 'danger-sm'): HTMLBut
   };
   b.style.cssText = styles[variant];
   return b;
+}
+
+function credentialStatusLabel(status: string | undefined): string {
+  switch (status) {
+    case 'verified': return '✓ verified (read)';
+    case 'auth_failed': return '✗ auth failed';
+    case 'unverified': return '• unverified';
+    default: return '—';
+  }
 }
 
 function esc(s: string): string {

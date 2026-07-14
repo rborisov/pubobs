@@ -570,3 +570,8 @@ func (c *Cache) AppendComment(ctx context.Context, repo *model.Repo, cloneCredJS
 	c.recordGitOpResult(repo.ID, err)
 	return err
 }
+
+// VerifyRemoteCredential reports whether credJSON grants access to remoteURL.
+func (c *Cache) VerifyRemoteCredential(remoteURL, credJSON string) error {
+	return c.git.LsRemote(remoteURL, credJSON)
+}

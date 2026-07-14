@@ -48,6 +48,8 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 			AllowGuest           bool    `json:"allow_guest"`
 			StorageDestinationID *string `json:"storage_destination_id"`
 			MigrationStatus      string  `json:"migration_status"`
+			OwnerUserID          *string `json:"owner_user_id"`
+			StrictCredentials    bool    `json:"strict_credentials"`
 		}
 		out := make([]repoResp, len(repos))
 		for i, repo := range repos {
@@ -69,6 +71,7 @@ func handleListRepos(deps *Deps) http.HandlerFunc {
 				DefaultBranch: repo.DefaultBranch, IsCloned: isCloned,
 				Role: role, AllowGuest: repo.AllowGuest,
 				StorageDestinationID: repo.StorageDestinationID, MigrationStatus: repo.MigrationStatus,
+				OwnerUserID: repo.OwnerUserID, StrictCredentials: repo.StrictCredentials,
 			}
 		}
 		writeJSON(w, http.StatusOK, out)

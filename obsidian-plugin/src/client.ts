@@ -94,7 +94,9 @@ export class BackendClient {
 
     if (resp.status >= 400) {
       const msg = (body as { error?: string })?.error ?? `HTTP ${resp.status}`;
-      throw new Error(msg);
+      const err = new Error(msg);
+      (err as any).status = resp.status;
+      throw err;
     }
     return body as T;
   }
@@ -167,6 +169,38 @@ export class BackendClient {
       method: 'POST',
       contentType: 'application/json',
       body: JSON.stringify({ mode }),
+    });
+  }
+
+  async setGitCredential(
+    repoId: string, opts: { username: string; token: string; gitName?: string; gitEmail?: string },
+  ): Promise<void> {
+    await this.request({
+      url: `${this.baseUrl}/api/repos/${repoId}/git-credential`,
+      method: 'PUT',
+      contentType: 'application/json',
+      body: JSON.stringify({
+        username: opts.username,
+        token: opts.token,
+        git_name: opts.gitName ?? '',
+        git_email: opts.gitEmail ?? '',
+      }),
+    });
+  }
+
+  async deleteGitCredential(repoId: string): Promise<void> {
+    await this.request({
+      url: `${this.baseUrl}/api/repos/${repoId}/git-credential`,
+      method: 'DELETE',
+    });
+  }
+
+  async verifyGitCredential(repoId: string): Promise<{ status: string }> {
+    return this.request({
+      url: `${this.baseUrl}/api/repos/${repoId}/git-credential/verify`,
+      method: 'POST',
+      contentType: 'application/json',
+      body: JSON.stringify({}),
     });
   }
 }

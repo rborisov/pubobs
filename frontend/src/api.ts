@@ -8,6 +8,8 @@ export interface Repo {
   allow_guest: boolean;
   storage_destination_id: string | null;
   migration_status: string; // "idle" | "running" | "done" | "failed"
+  owner_user_id?: string | null;
+  strict_credentials?: boolean;
 }
 
 export interface RepoAccess {
@@ -16,6 +18,7 @@ export interface RepoAccess {
   principal_type: string;
   principal_id: string;
   role: string;
+  git_credential?: string;
 }
 
 export interface User {
@@ -203,6 +206,24 @@ export async function setRepoGuestAccess(id: string, allowGuest: boolean): Promi
     body: JSON.stringify({ allow_guest: allowGuest }),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setRepoOwner(id: string, ownerUserId: string): Promise<void> {
+  const resp = await authedFetch(`/api/admin/repos/${id}/owner`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ owner_user_id: ownerUserId }),
+  });
+  if (!resp.ok) throw new Error((await resp.text().catch(() => '')) || 'transfer failed');
+}
+
+export async function setRepoStrictCredentials(id: string, strict: boolean): Promise<void> {
+  const resp = await authedFetch(`/api/admin/repos/${id}/strict-credentials`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strict }),
+  });
+  if (!resp.ok) throw new Error((await resp.text().catch(() => '')) || 'update failed');
 }
 
 export async function listRepoAccess(repoId: string): Promise<RepoAccess[]> {

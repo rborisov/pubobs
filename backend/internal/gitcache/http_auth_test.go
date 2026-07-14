@@ -502,3 +502,20 @@ func TestGetOrClone_FailedRecloneOfCorruptedDirLeavesLivePathIntact(t *testing.T
 	require.Len(t, entries, 1, "no stray temp/staging directory should remain after a failed re-clone, found: %v", entries)
 	require.Equal(t, repo.ID, entries[0].Name())
 }
+
+// TestLsRemote_validVsInvalidCredential tests LsRemote with both valid and
+// invalid credentials against an auth-gated remote, verifying that correct
+// credentials succeed and incorrect ones fail with ErrGitAuthFailed.
+func TestLsRemote_validVsInvalidCredential(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+	srv := newAuthRequiredGitServer(t, bareURL, "validuser", "validpass")
+	repoURL := srv.URL + "/remote.git"
+	g := gitcache.NewGitRunner()
+
+	require.NoError(t, g.LsRemote(repoURL, `{"username":"validuser","password":"validpass"}`))
+
+	err := g.LsRemote(repoURL, `{"username":"validuser","password":"wrong"}`)
+	require.Error(t, err)
+	require.ErrorIs(t, err, gitcache.ErrGitAuthFailed)
+}

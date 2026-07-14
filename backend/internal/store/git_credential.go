@@ -87,3 +87,16 @@ func (s *Store) ListUserCredentials(ctx context.Context, repoID string) ([]UserC
 	}
 	return out, rows.Err()
 }
+
+func (s *Store) GetUserCredentialGitIdentity(ctx context.Context, repoID, userID string) (string, string, bool, error) {
+	var name, email string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT git_name, git_email FROM repo_user_credentials WHERE repo_id=? AND user_id=?`, repoID, userID).Scan(&name, &email)
+	if err == sql.ErrNoRows {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return name, email, true, nil
+}
