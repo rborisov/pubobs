@@ -118,5 +118,32 @@ func Open(dsn string) (*sql.DB, error) {
 			}
 		}
 	}
+	for _, alter := range []string{
+		`ALTER TABLE repos ADD COLUMN owner_user_id TEXT`,
+		`ALTER TABLE repos ADD COLUMN strict_credentials INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(alter); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate repos ownership columns: %w", err)
+			}
+		}
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS repo_user_credentials (
+			repo_id         TEXT NOT NULL,
+			user_id         TEXT NOT NULL,
+			encrypted_creds TEXT NOT NULL,
+			git_name        TEXT NOT NULL DEFAULT '',
+			git_email       TEXT NOT NULL DEFAULT '',
+			verify_status   TEXT NOT NULL DEFAULT 'unverified',
+			verify_error    TEXT NOT NULL DEFAULT '',
+			verified_at     TIMESTAMP,
+			updated_at      TIMESTAMP NOT NULL,
+			PRIMARY KEY (repo_id, user_id)
+		)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate repo_user_credentials: %w", err)
+	}
 	return db, nil
 }

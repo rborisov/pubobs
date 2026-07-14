@@ -68,3 +68,21 @@ func TestOpen_inMemoryStaysSingleConnection(t *testing.T) {
 
 	require.Equal(t, 1, d.Stats().MaxOpenConnections)
 }
+
+func TestOpen_perUserCredentialSchema(t *testing.T) {
+	dbConn, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	defer dbConn.Close()
+
+	// New repos columns exist.
+	_, err = dbConn.Exec(`INSERT INTO repos (id, name, remote_url, encrypted_creds, default_branch, owner_user_id, strict_credentials) VALUES ('r1','R','u','','main','u1',1)`)
+	require.NoError(t, err)
+
+	// repo_user_credentials table exists with the expected columns.
+	_, err = dbConn.Exec(`INSERT INTO repo_user_credentials (repo_id, user_id, encrypted_creds, git_name, git_email, verify_status, updated_at) VALUES ('r1','u1','enc','Al','a@x','unverified',CURRENT_TIMESTAMP)`)
+	require.NoError(t, err)
+
+	var n int
+	require.NoError(t, dbConn.QueryRow(`SELECT COUNT(*) FROM repo_user_credentials WHERE repo_id='r1' AND user_id='u1'`).Scan(&n))
+	require.Equal(t, 1, n)
+}
