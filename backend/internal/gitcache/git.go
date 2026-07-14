@@ -476,6 +476,12 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, credJSON, branch, message stri
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
 		return "", err
 	}
+	// Bound loose-object growth. A repo that's synced/commented on regularly
+	// never idles long enough to be evicted, so without this every commit's
+	// objects would accumulate in .git/objects forever (git gc is run nowhere
+	// else). "--auto" is a cheap no-op until git's own thresholds are exceeded;
+	// a gc failure must not fail the sync/comment, so it's best-effort.
+	_, _ = g.run(dir, "gc", "--auto")
 	return g.run(dir, "rev-parse", "HEAD")
 }
 
