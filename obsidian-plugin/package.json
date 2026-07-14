@@ -1,6 +1,6 @@
 {
   "name": "pubobs",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "description": "PubObs Obsidian plugin",
   "main": "main.js",
   "scripts": {
