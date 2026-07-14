@@ -94,7 +94,9 @@ export class BackendClient {
 
     if (resp.status >= 400) {
       const msg = (body as { error?: string })?.error ?? `HTTP ${resp.status}`;
-      throw new Error(msg);
+      const err = new Error(msg);
+      (err as any).status = resp.status;
+      throw err;
     }
     return body as T;
   }

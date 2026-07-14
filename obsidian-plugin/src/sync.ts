@@ -365,26 +365,37 @@ export class SyncManager {
     }
 
     console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged, ${failedFiles.length} failed`);
-    const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
+    try {
+      const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
 
-    // The backend is the sole authority on each note's key — always
-    // overwrite our local cache with whatever it just returned, even for
-    // notes we thought we already had a key for (e.g. an admin
-    // unshared/rotated the key via the web UI since our last sync).
-    if (result.note_keys) {
-      if (!this.settings.noteKeys) this.settings.noteKeys = {};
-      if (!this.settings.noteKeys[repoId]) this.settings.noteKeys[repoId] = {};
-      for (const [path, key] of Object.entries(result.note_keys)) {
-        this.settings.noteKeys[repoId][path] = key;
+      // The backend is the sole authority on each note's key — always
+      // overwrite our local cache with whatever it just returned, even for
+      // notes we thought we already had a key for (e.g. an admin
+      // unshared/rotated the key via the web UI since our last sync).
+      if (result.note_keys) {
+        if (!this.settings.noteKeys) this.settings.noteKeys = {};
+        if (!this.settings.noteKeys[repoId]) this.settings.noteKeys[repoId] = {};
+        for (const [path, key] of Object.entries(result.note_keys)) {
+          this.settings.noteKeys[repoId][path] = key;
+        }
+      }
+
+      // Persist hashes only after a successful sync
+      for (const p of deletedPaths) delete newHashes[p];
+      this.settings.syncHashes[repoId] = newHashes;
+      await this.saveSettings();
+
+      new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
+    } catch (e) {
+      const err = e as any;
+      if (err?.status === 403) {
+        new Notice(`PubObs: configure your git credential for "${mapping.repoName}" in Settings before publishing.`, 10000);
+      } else {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error('[PubObs] sync failed:', e);
+        new Notice(`PubObs: sync failed — ${reason}`, 10000);
       }
     }
-
-    // Persist hashes only after a successful sync
-    for (const p of deletedPaths) delete newHashes[p];
-    this.settings.syncHashes[repoId] = newHashes;
-    await this.saveSettings();
-
-    new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
   }
 
   private async createLocalCopy(
