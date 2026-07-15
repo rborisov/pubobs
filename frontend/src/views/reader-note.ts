@@ -6,7 +6,7 @@ import { isAuthenticated } from '../auth';
 import { ensureReaderStyles } from '../reader-styles';
 import { loadingRow } from '../spinner';
 
-export async function readerNoteView(repoId: string, rawNotePath: string): Promise<HTMLElement> {
+export function readerNoteView(repoId: string, rawNotePath: string): HTMLElement {
   ensureReaderStyles();
 
   // The route is registered as '/read/:repoId/*', so rawNotePath is
@@ -26,28 +26,90 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   wrap.className = 'r-note-wrap';
   wrap.style.cssText = 'padding:40px 24px;font-family:system-ui,sans-serif';
 
-  // Inject Obsidian's theme CSS once per repo, with targeted patches for rules
-  // that break normal browser layout (overflow:hidden on body, fixed heights,
-  // etc.). The router removes this element whenever you leave the reader, so
-  // it never bleeds into the admin panel — but within the reader, cache it
-  // per repo (rather than once ever) so switching repos picks up that
-  // repo's own theme instead of keeping whichever loaded first.
-  const existing = document.getElementById('obsidian-theme-css');
-  if (existing?.getAttribute('data-repo-id') !== repoId) {
-    existing?.remove();
-    const cssText = await fetch(`/pub/${repoId}/assets/_pubobs/obsidian.css`)
-      .then(r => r.ok ? r.text() : '')
-      .catch(() => '');
+  // Fire the repo's Obsidian theme CSS in parallel — it styles the rendered
+  // note body, which itself only appears once the (slower) note fetch lands,
+  // so blocking the whole page on this stylesheet bought nothing. Injected
+  // non-blocking here so the reader frame paints immediately.
+  injectRepoTheme(repoId);
 
-    if (cssText) {
+  // Paint the reader frame instantly with a skeleton, then fill it in once the
+  // note fetch resolves. Previously this whole view awaited pubGetNote (which
+  // does a server-side render-blob read + decrypt) before ANY pixel showed, so
+  // a note loaded as one all-or-nothing "bulb". The back link's final target
+  // depends on repo access (known only after the fetch); default it to the
+  // repo list and correct it in loadNote once has_repo_access is known.
+  const back = document.createElement('a');
+  back.href = `#/read/${repoId}`;
+  back.className = 'r-muted';
+  back.style.cssText = 'font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
+  back.textContent = '← Back';
+  wrap.appendChild(back);
+
+  const article = document.createElement('article');
+  article.appendChild(buildNoteSkeleton());
+  wrap.appendChild(article);
+
+  void loadNote(repoId, notePath, urlKey, wrap, back, article);
+
+  return wrap;
+}
+
+// injectRepoTheme fetches and applies a repo's Obsidian theme CSS without
+// blocking the caller, with targeted patches for rules that break normal
+// browser layout (overflow:hidden on body, fixed heights, etc.). The router
+// removes this element whenever you leave the reader, so it never bleeds into
+// the admin panel — but within the reader it's cached per repo (rather than
+// once ever) so switching repos picks up that repo's own theme. A stale theme
+// from a prior repo is kept on screen until the new one arrives, avoiding an
+// unstyled flash mid-navigation.
+function injectRepoTheme(repoId: string): void {
+  const existing = document.getElementById('obsidian-theme-css');
+  if (existing?.getAttribute('data-repo-id') === repoId) return;
+
+  void fetch(`/pub/${repoId}/assets/_pubobs/obsidian.css`)
+    .then(r => r.ok ? r.text() : '')
+    .catch(() => '')
+    .then(cssText => {
+      // Re-check after the fetch: the reader may have navigated to a different
+      // repo while this request was in flight, in which case a newer call has
+      // already applied that repo's theme — don't clobber it with this one.
+      const cur = document.getElementById('obsidian-theme-css');
+      if (cur?.getAttribute('data-repo-id') === repoId) return;
+      cur?.remove();
+      if (!cssText) return;
       const style = document.createElement('style');
       style.id = 'obsidian-theme-css';
       style.setAttribute('data-repo-id', repoId);
       style.textContent = patchObsidianCSS(cssText);
       document.head.appendChild(style);
-    }
-  }
+    });
+}
 
+// buildNoteSkeleton renders shimmer placeholders sized like a title + a few
+// body lines, shown in the article slot until the real note content arrives.
+function buildNoteSkeleton(): HTMLElement {
+  const sk = document.createElement('div');
+  sk.setAttribute('aria-hidden', 'true');
+  const bar = (css: string) => `<div class="r-skeleton" style="${css}"></div>`;
+  sk.innerHTML =
+    bar('height:2.2rem;width:65%;margin-bottom:28px') +
+    ['100%', '96%', '90%', '98%', '85%', '45%']
+      .map(w => bar(`height:0.85rem;width:${w};margin-bottom:14px`))
+      .join('');
+  return sk;
+}
+
+// loadNote fetches the note and fills the pre-painted shell (back link +
+// article) in place, replacing the skeleton. Kept separate from readerNoteView
+// so that view can return its frame synchronously for an instant first paint.
+async function loadNote(
+  repoId: string,
+  notePath: string,
+  urlKey: string | undefined,
+  wrap: HTMLElement,
+  back: HTMLAnchorElement,
+  article: HTMLElement,
+): Promise<void> {
   let note: PubNoteDetail;
   try {
     // Pass the share key through to the metadata fetch — on a guest-closed
@@ -55,10 +117,8 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
     // it here yields a 404 for share-link-only visitors.
     note = await pubGetNote(repoId, notePath, urlKey);
   } catch (e: unknown) {
-    wrap.innerHTML = `
-      <a href="#/read/${repoId}" class="r-muted" style="font-size:0.875rem;text-decoration:none">← Back</a>
-      <p class="r-error" style="margin-top:16px">${e instanceof Error ? e.message : String(e)}</p>`;
-    return wrap;
+    article.innerHTML = `<p class="r-error" style="margin-top:16px">${e instanceof Error ? e.message : String(e)}</p>`;
+    return;
   }
 
   // The URL's ?key= param is the ONLY source of a decryption key — there is
@@ -74,15 +134,12 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   // has_repo_access). A share-link-only visitor on a guest-CLOSED repo has no
   // access to that list — it would render "repo not found" — so send them to
   // the login screen instead. Keyed access on a guest-OPEN repo still counts
-  // as repo access, so those links correctly go back to the list.
-  const back = document.createElement('a');
-  back.href = note.has_repo_access ? `#/read/${repoId}` : '#/login';
-  back.className = 'r-muted';
-  back.style.cssText = 'font-size:0.875rem;text-decoration:none;display:block;margin-bottom:32px';
-  back.textContent = '← Back';
-  wrap.appendChild(back);
+  // as repo access, so those links correctly go back to the list. Defaulted to
+  // the repo list in readerNoteView; corrected here now that access is known.
+  if (!note.has_repo_access) back.href = '#/login';
 
-  const article = document.createElement('article');
+  // Swap the skeleton out for the real note content.
+  article.innerHTML = '';
 
   const h1 = document.createElement('h1');
   h1.className = 'r-note-title';
@@ -171,8 +228,6 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   }
   article.appendChild(content);
 
-  wrap.appendChild(article);
-
   if (note.backlinks?.length > 0) {
     const section = document.createElement('section');
     section.className = 'r-border-bottom';
@@ -202,8 +257,6 @@ export async function readerNoteView(repoId: string, rawNotePath: string): Promi
   wrap.appendChild(commentsSection);
   const commentsList = commentsSection.querySelector(`#comments-list-${note.id}`) as HTMLElement;
   loadComments(repoId, notePath, commentsList, effectiveKey);
-
-  return wrap;
 }
 
 // buildShareControl renders a small popover offering the two canonical share

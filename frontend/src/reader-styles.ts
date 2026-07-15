@@ -158,6 +158,18 @@ export function ensureReaderStyles(): void {
     }
     /* Long words / URLs shouldn't force the page wider than the screen. */
     .markdown-rendered { overflow-wrap: anywhere; }
+
+    /* Skeleton placeholders shown while a note's body is still loading, so the
+       reader frame (back link, title area) paints instantly instead of the
+       whole page waiting on one blocking fetch. */
+    @keyframes pubobs-shimmer { 0% { background-position: -450px 0; } 100% { background-position: 450px 0; } }
+    .r-skeleton {
+      background: linear-gradient(90deg, var(--r-hover-bg) 25%, var(--r-border) 37%, var(--r-hover-bg) 63%);
+      background-size: 900px 100%;
+      animation: pubobs-shimmer 1.4s ease-in-out infinite;
+      border-radius: 4px;
+    }
+    @media (prefers-reduced-motion: reduce) { .r-skeleton { animation: none; } }
     /* Wide code blocks scroll within themselves rather than off-screen.
        Wide tables are wrapped in an overflow-x container at render time
        (see reader-note.ts) for the same reason. */
