@@ -12,13 +12,20 @@
  * path, and a user who types it is expressing a reasonable-but-redundant
  * intent, not an error worth failing the whole sync over. The backend refuses
  * it outright, so it must never be sent.
+ *
+ * This is a free-text box the user may still be mid-typo in, so malformed
+ * entries are silently dropped rather than surfaced as an error — the same
+ * `^[a-z0-9]{1,10}$` shape the backend itself requires (it 400s the whole
+ * request on any violation). Filtering client-side means a stray semicolon
+ * or symbol costs the user that one extension instead of failing the entire
+ * pull or sync. The asymmetry (server rejects, client drops) is deliberate.
  */
 export function parseDataFileExtensions(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const part of raw.split(',')) {
     const ext = part.trim().replace(/^\./, '').toLowerCase();
-    if (!ext || ext === 'md' || seen.has(ext)) continue;
+    if (!ext || ext === 'md' || seen.has(ext) || !/^[a-z0-9]{1,10}$/.test(ext)) continue;
     seen.add(ext);
     out.push(ext);
   }

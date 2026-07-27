@@ -18,6 +18,17 @@ describe('parseDataFileExtensions', () => {
     expect(parseDataFileExtensions('')).toEqual([]);
     expect(parseDataFileExtensions('  ,  ,')).toEqual([]);
   });
+
+  test('drops malformed entries instead of sending them to the backend', () => {
+    expect(parseDataFileExtensions('csv;json')).toEqual([]);
+    expect(parseDataFileExtensions('cs v')).toEqual([]);
+    expect(parseDataFileExtensions('c*v')).toEqual([]);
+    expect(parseDataFileExtensions('toolongextension')).toEqual([]);
+  });
+
+  test('keeps well-formed entries alongside a dropped malformed one', () => {
+    expect(parseDataFileExtensions('csv, c*v, json')).toEqual(['csv', 'json']);
+  });
 });
 
 describe('isDataFilePath', () => {
@@ -37,6 +48,11 @@ describe('isDataFilePath', () => {
 
   test('a dot in a directory name is not an extension', () => {
     expect(isDataFilePath('my.data/file', exts)).toBe(false);
+  });
+
+  test('dotfiles are not treated as having an extension', () => {
+    expect(isDataFilePath('.gitignore', exts)).toBe(false);
+    expect(isDataFilePath('dir/.env', exts)).toBe(false);
   });
 });
 

@@ -135,6 +135,12 @@ export class BackendClient {
     return resp.json as TokenResponse;
   }
 
+  // skipped_paths is optional in the type even though the current backend
+  // always includes it: a plugin can be updated ahead of its backend, and a
+  // backend predating data-file sync returns a response with no such key at
+  // all. Making it required wouldn't make it present at runtime — it would
+  // just delete the type-level reminder, at the one call site that needs it,
+  // that the field can be absent.
   async sync(
     repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[],
     dataFiles: SyncDataFile[] = [],
