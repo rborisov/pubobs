@@ -107,3 +107,30 @@ func TestHandleSync_emptyRepoInitialPushRejection(t *testing.T) {
 	require.NotContains(t, body, "pull first")
 	require.Contains(t, body, "write access")
 }
+
+// Every path in a sync payload is joined onto the repo's clone dir and then
+// written or removed. A payload that escapes the clone must be refused
+// outright rather than sanitized — see validRepoPath.
+func TestHandleSync_rejectsTraversalPaths(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	payloads := map[string]string{
+		"file":    `{"files":[{"path":"../../escaped.md","md_content":"x"}]}`,
+		"asset":   `{"files":[],"assets":[{"path":"../../escaped.png","content":"eA=="}]}`,
+		"deleted": `{"files":[],"deleted_paths":["../../escaped.md"]}`,
+		"gitdir":  `{"files":[{"path":".git/hooks/pre-push","md_content":"x"}]}`,
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			deps := newSyncableRepo(t, bareURL)
+			req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+			req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+			rr := httptest.NewRecorder()
+			api.BuildRouter(deps).ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+			require.Contains(t, rr.Body.String(), "invalid path")
+		})
+	}
+}

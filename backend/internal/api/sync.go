@@ -73,6 +73,29 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
+		// Validate every client-supplied path before anything is written.
+		// One rejection fails the whole request: a sync is a single commit,
+		// and silently dropping one bad path would produce a commit the
+		// client believes is complete but isn't.
+		for _, f := range payload.Files {
+			if !validRepoPath(f.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+f.Path)
+				return
+			}
+		}
+		for _, a := range payload.Assets {
+			if !validRepoPath(a.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+a.Path)
+				return
+			}
+		}
+		for _, p := range payload.DeletedPaths {
+			if !validRepoPath(p) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+p)
+				return
+			}
+		}
+
 		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "cred decrypt failed")
