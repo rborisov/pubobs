@@ -136,3 +136,50 @@ func TestPushRejectionReason_redactsCredentials(t *testing.T) {
 	require.NotContains(t, reason, "s3cr3t")
 	require.Contains(t, reason, "git.example.com")
 }
+
+// Redact must survive a password containing "/" — the character class it used
+// to rely on ([^/@\s]*) could not span one, so any such credential passed
+// through unredacted. Real tokens carry slashes (GitLab PATs, base64-derived
+// secrets), and a user who pastes a repo URL into the token field produces a
+// password made almost entirely of them.
+func TestRedact_passwordContainingSlashes(t *testing.T) {
+	cases := []struct{ name, in, mustNotContain string }{
+		{
+			name:           "repo URL pasted into the token field",
+			in:             `fatal: unable to access 'https://rborisov:https://github.com/rborisov/vis-charts-wiki@github.com/rborisov/vis-charts-wiki/': URL rejected`,
+			mustNotContain: "rborisov:https",
+		},
+		{
+			name:           "token containing a slash",
+			in:             `fatal: unable to access 'https://user:glpat-x/y+z@gitlab.com/o/r.git/'`,
+			mustNotContain: "glpat-x/y+z",
+		},
+		{
+			name:           "token containing an @",
+			in:             `fatal: unable to access 'https://user:p@ss/word@git.example.com/o/r.git/'`,
+			mustNotContain: "p@ss/word",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Redact(c.in)
+			require.NotContains(t, got, c.mustNotContain, "credential survived redaction: %s", got)
+			require.Contains(t, got, "://", "the URL scheme should survive so the message still reads as a URL")
+		})
+	}
+}
+
+// The ordinary case keeps working, and the host stays visible so the message
+// still says which remote failed.
+func TestRedact_keepsHost(t *testing.T) {
+	got := Redact(`fatal: unable to access 'https://user:ghp_abc123@github.com/o/r.git/'`)
+	require.NotContains(t, got, "ghp_abc123")
+	require.Contains(t, got, "github.com/o/r.git")
+}
+
+// A URL with no credentials at all must pass through untouched — over-eager
+// redaction would mangle every ordinary error message.
+func TestRedact_leavesCleanURLAlone(t *testing.T) {
+	in := `fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host`
+	require.Equal(t, in, Redact(in))
+}

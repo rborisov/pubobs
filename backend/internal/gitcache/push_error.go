@@ -93,7 +93,18 @@ var (
 	// injected into the remote URL handed to git (see credentialedURL), so any
 	// text derived from git's output must be scrubbed before it can be shown
 	// to a client.
-	credentialInURLRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]*@`)
+	//
+	// The userinfo class deliberately allows "/" and ":". An earlier version
+	// used [^/@\s]*, which silently failed to redact anything whose password
+	// contained a slash — and passwords do: GitLab PATs, base64-derived
+	// secrets, and any hand-typed password can carry one. A user who pasted a
+	// repository URL into the token field produced
+	// `https://user:https://github.com/o/r@github.com/o/r/`, which that class
+	// could not span, so the whole credential was echoed to the client
+	// verbatim. Excluding only whitespace and quotes means the match runs to
+	// the LAST "@" in the token; when a path also contains "@" this redacts
+	// more than strictly necessary, which is the correct direction to err.
+	credentialInURLRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s'"]*@`)
 )
 
 // PushRejectionReason extracts the human-meaningful explanation from a failed
