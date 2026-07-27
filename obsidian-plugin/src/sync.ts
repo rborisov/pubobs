@@ -227,35 +227,60 @@ export class SyncManager {
       // Data files are pulled in their own try/catch: a backend that predates
       // this feature returns 404 here, and that must degrade to notes-only
       // syncing rather than failing the whole pull.
+      let dataFilesListed = false;
       try {
         const exts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
         if (exts.length > 0) {
           const maxBytes = Math.max(1, this.settings.dataFileMaxMB ?? 5) * 1024 * 1024;
           const { files: dataFiles, skipped } = await this.client.listDataFiles(repoId, exts, maxBytes);
+          dataFilesListed = true;
 
           for (const file of dataFiles) {
-            if (storedPullSHAs[file.path] === file.sha) continue;
+            // Isolate each file: one file that fails to read/write must not
+            // abort the rest of the loop (and, critically, must not skip the
+            // saveSettings below — a file already written to disk needs its
+            // pullSHAs entry persisted too, or it gets re-pulled or wrongly
+            // treated as a deletion candidate next run).
+            try {
+              if (storedPullSHAs[file.path] === file.sha) continue;
 
-            const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
-            const existing = this.app.vault.getAbstractFileByPath(vaultPath);
-            if (existing instanceof TFile) {
-              // Same protection notes get: never overwrite edits that were
-              // made locally and haven't been pushed yet.
-              const localContent = await this.app.vault.read(existing);
-              const lastSyncedHash = (this.settings.syncHashes[repoId] ?? {})[file.path];
-              if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
+              const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+              const existing = this.app.vault.getAbstractFileByPath(vaultPath);
+              if (existing instanceof TFile) {
+                // Same protection notes get: never overwrite edits that were
+                // made locally and haven't been pushed yet.
+                const localContent = await this.app.vault.read(existing);
+                const lastSyncedHash = (this.settings.syncHashes[repoId] ?? {})[file.path];
+                if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
+                  continue;
+                }
+                await this.app.vault.modify(existing, file.content);
+              } else if (
+                (this.settings.syncHashes[repoId] ?? {})[file.path] !== undefined
+                || (this.settings.pullSHAs[repoId] ?? {})[file.path] !== undefined
+              ) {
+                // Same pending-deletion handling as notes above: no local file
+                // exists at this path, but this vault previously pushed or
+                // pulled it — its absence means a local deletion that hasn't
+                // reached the remote yet, not new content to resurrect. Drop
+                // the stale pull-SHA and let the push phase's deletion
+                // detection (currentRepoPaths vs. knownPaths) report it.
+                delete storedPullSHAs[file.path];
                 continue;
+              } else {
+                const dir = vaultPath.split('/').slice(0, -1).join('/');
+                if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+                  await this.app.vault.createFolder(dir);
+                }
+                await this.app.vault.create(vaultPath, file.content);
               }
-              await this.app.vault.modify(existing, file.content);
-            } else {
-              const dir = vaultPath.split('/').slice(0, -1).join('/');
-              if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
-                await this.app.vault.createFolder(dir);
-              }
-              await this.app.vault.create(vaultPath, file.content);
+              storedPullSHAs[file.path] = file.sha;
+              pulledData++;
+            } catch (e) {
+              const reason = e instanceof Error ? e.message : String(e);
+              console.error(`[PubObs] failed to pull data file "${file.path}": ${reason}`, e);
+              new Notice(`PubObs: skipped pulling "${file.path}" — ${reason}`, 10000);
             }
-            storedPullSHAs[file.path] = file.sha;
-            pulledData++;
           }
 
           if (skipped.length > 0) {
@@ -268,8 +293,23 @@ export class SyncManager {
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
-        console.error('[PubObs] data file pull failed:', e);
-        new Notice(`PubObs: data files not synced — ${reason}`, 10000);
+        // A 404 means this backend predates the data-files feature entirely —
+        // an expected, benign state for an older server, not something to
+        // alarm the user about on every single sync. Log it and move on.
+        if ((e as { status?: number })?.status === 404) {
+          console.log('[PubObs] backend has no /data-files endpoint — skipping data file pull');
+        } else if (dataFilesListed) {
+          // The list succeeded and files may already be written to the vault
+          // (per-file failures above are isolated and don't reach here) — what
+          // actually failed here is persisting pullSHAs, not the data file
+          // sync itself, so say that rather than the more alarming "not
+          // synced".
+          console.error('[PubObs] failed to save data file sync state:', e);
+          new Notice(`PubObs: data files pulled but sync state not saved — ${reason}`, 10000);
+        } else {
+          console.error('[PubObs] data file pull failed:', e);
+          new Notice(`PubObs: data files not synced — ${reason}`, 10000);
+        }
       }
 
       if (incompatible.length > 0) {
