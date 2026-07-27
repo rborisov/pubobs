@@ -205,6 +205,7 @@ export class SyncManager {
       }
 
       let pulled = 0;
+      let pulledData = 0;
       for (const file of toPull) {
         const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
         const dir = vaultPath.split('/').slice(0, -1).join('/');
@@ -223,6 +224,54 @@ export class SyncManager {
       this.settings.pullSHAs[repoId] = storedPullSHAs;
       await this.saveSettings();
 
+      // Data files are pulled in their own try/catch: a backend that predates
+      // this feature returns 404 here, and that must degrade to notes-only
+      // syncing rather than failing the whole pull.
+      try {
+        const exts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
+        if (exts.length > 0) {
+          const maxBytes = Math.max(1, this.settings.dataFileMaxMB ?? 5) * 1024 * 1024;
+          const { files: dataFiles, skipped } = await this.client.listDataFiles(repoId, exts, maxBytes);
+
+          for (const file of dataFiles) {
+            if (storedPullSHAs[file.path] === file.sha) continue;
+
+            const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+            const existing = this.app.vault.getAbstractFileByPath(vaultPath);
+            if (existing instanceof TFile) {
+              // Same protection notes get: never overwrite edits that were
+              // made locally and haven't been pushed yet.
+              const localContent = await this.app.vault.read(existing);
+              const lastSyncedHash = (this.settings.syncHashes[repoId] ?? {})[file.path];
+              if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
+                continue;
+              }
+              await this.app.vault.modify(existing, file.content);
+            } else {
+              const dir = vaultPath.split('/').slice(0, -1).join('/');
+              if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+                await this.app.vault.createFolder(dir);
+              }
+              await this.app.vault.create(vaultPath, file.content);
+            }
+            storedPullSHAs[file.path] = file.sha;
+            pulledData++;
+          }
+
+          if (skipped.length > 0) {
+            const names = skipped.map(s => `${s.path} (${s.reason === 'too_large' ? 'too large' : 'not text'})`);
+            new Notice(`PubObs: ${skipped.length} data file(s) skipped — ${names.join(', ')}`, 10000);
+          }
+
+          this.settings.pullSHAs[repoId] = storedPullSHAs;
+          await this.saveSettings();
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error('[PubObs] data file pull failed:', e);
+        new Notice(`PubObs: data files not synced — ${reason}`, 10000);
+      }
+
       if (incompatible.length > 0) {
         await new Promise<void>(resolve => {
           new IncompatibleNotesModal(
@@ -239,7 +288,9 @@ export class SyncManager {
         });
       }
 
-      if (pulled > 0) notice.setMessage(`PubObs: pulled ${pulled} note(s), pushing local changes…`);
+      if (pulled > 0 || pulledData > 0) {
+        notice.setMessage(`PubObs: pulled ${pulled} note(s), ${pulledData} data file(s), pushing local changes…`);
+      }
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.error('[PubObs] pull phase failed:', e);

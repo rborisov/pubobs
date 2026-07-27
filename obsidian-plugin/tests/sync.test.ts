@@ -600,11 +600,24 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
   }
 
   function makeMockApp(files: unknown[], metadataCache: ReturnType<typeof makeMetadataCache>) {
+    // Mirrors real Obsidian: vault.create() immediately updates what
+    // getFiles()/getAbstractFileByPath() return within the same run. This
+    // matters for the data-file pull — a file the pull phase writes must be
+    // visible to the push phase's enumeration moments later in the same
+    // syncRepo() call, or it's wrongly treated as a deletion (known via
+    // pullSHAs, absent from currentRepoPaths).
+    const live = new Map<string, unknown>((files as Array<{ path: string }>).map(f => [f.path, f]));
     return {
       vault: {
-        getFiles: jest.fn().mockReturnValue(files),
-        getAbstractFileByPath: jest.fn().mockReturnValue(null),
-        create: jest.fn().mockResolvedValue(undefined),
+        getFiles: jest.fn(() => [...live.values()]),
+        getAbstractFileByPath: jest.fn((path: string) => live.get(path) ?? null),
+        create: jest.fn((path: string) => {
+          const base = path.slice(path.lastIndexOf('/') + 1);
+          const dot = base.lastIndexOf('.');
+          const extension = dot >= 0 ? base.slice(dot + 1) : '';
+          live.set(path, { path, extension, basename: base.replace(/\.md$/, '') });
+          return Promise.resolve(undefined);
+        }),
         modify: jest.fn().mockResolvedValue(undefined),
         createFolder: jest.fn().mockResolvedValue(undefined),
         read: jest.fn().mockResolvedValue('# Hello'),
@@ -855,5 +868,76 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
     await manager.syncRepo('repo-1');
 
     expect((client.sync as jest.Mock).mock.calls[0][4]).toEqual([]);
+  });
+
+  test('a data file in the repo is written into the mapped vault folder', async () => {
+    const metadataCache = makeMetadataCache();
+    const app = makeMockApp([], metadataCache);
+    const client = makeMockClient();
+    (client.listDataFiles as jest.Mock).mockResolvedValue({
+      files: [{ path: 'data/table.csv', content: 'a,b\n1,2\n', sha: 'sha1', size: 8 }],
+      skipped: [],
+    });
+    const settings = makeSettings();
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.create).toHaveBeenCalledWith('Published/data/table.csv', 'a,b\n1,2\n');
+    expect(settings.pullSHAs['repo-1']['data/table.csv']).toBe('sha1');
+  });
+
+  test('a data file with unpushed local edits is not overwritten by the pull', async () => {
+    const csv = makeMockFile('Published/data/table.csv');
+    const metadataCache = makeMetadataCache(new Set([csv.path]));
+    const app = makeMockApp([csv], metadataCache);
+    app.vault.getAbstractFileByPath = jest.fn((p: string) => (p === csv.path ? csv : null));
+    app.vault.read = jest.fn().mockResolvedValue('locally,edited\n');
+    const client = makeMockClient();
+    (client.listDataFiles as jest.Mock).mockResolvedValue({
+      files: [{ path: 'data/table.csv', content: 'from,repo\n', sha: 'sha2', size: 10 }],
+      skipped: [],
+    });
+    const settings = makeSettings();
+    // Last synced content hashed to something else — i.e. local edits exist.
+    settings.syncHashes = { 'repo-1': { 'data/table.csv': 'different-hash' } } as any;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(app.vault.modify).not.toHaveBeenCalledWith(csv, 'from,repo\n');
+  });
+
+  test('files the server skipped are reported to the user', async () => {
+    const metadataCache = makeMetadataCache();
+    const app = makeMockApp([], metadataCache);
+    const client = makeMockClient();
+    (client.listDataFiles as jest.Mock).mockResolvedValue({
+      files: [],
+      skipped: [{ path: 'data/huge.csv', size: 60000000, reason: 'too_large' }],
+    });
+
+    const manager = new SyncManager(app as any, client as any, makeSettings() as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(getNotices().some(n => n.includes('data/huge.csv'))).toBe(true);
+  });
+
+  // An older backend has no /data-files route. That must degrade to
+  // notes-only syncing, not break the sync.
+  test('a backend without the data-files endpoint still syncs notes', async () => {
+    const note = makeMockFile('Published/notes/a.md');
+    const metadataCache = makeMetadataCache(new Set([note.path]));
+    const app = makeMockApp([note], metadataCache);
+    const client = makeMockClient();
+    const err = new Error('HTTP 404');
+    (err as unknown as { status: number }).status = 404;
+    (client.listDataFiles as jest.Mock).mockRejectedValue(err);
+
+    const manager = new SyncManager(app as any, client as any, makeSettings() as any, jest.fn().mockResolvedValue(undefined));
+    await expect(manager.syncRepo('repo-1')).resolves.toBeUndefined();
+
+    expect(client.sync).toHaveBeenCalled();
+    expect((client.sync as jest.Mock).mock.calls[0][1]).toHaveLength(1);
   });
 });
