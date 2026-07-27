@@ -453,6 +453,44 @@ func TestHandleSync_rejectsTraversalInDataFiles(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "invalid path")
 }
 
+// A .md path sent as a data file must be refused. The data-file write bypasses
+// the note pipeline entirely, so accepting one would put new content in git
+// while the note row, snapshot and render blob keep the old content — the
+// reader and the repo would disagree permanently. Worse, when the same path
+// appears in both lists, the data-file entry is appended to cacheFiles last and
+// silently overwrites the note's. The plugin drops .md client-side and the list
+// endpoint refuses an "md" extension; only this handler was missing the rule,
+// so any non-plugin client with editor role could do it.
+func TestHandleSync_rejectsMarkdownAsDataFile(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	for _, path := range []string{"notes/a.md", "notes/A.MD"} {
+		payload := `{"files":[{"path":"notes/a.md","md_content":"# Note","encrypted_html":"dGVzdA=="}],` +
+			`"data_files":[{"path":"` + path + `","content":"hijacked"}]}`
+		req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+		req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+		rr := httptest.NewRecorder()
+		api.BuildRouter(deps).ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code, "path %q: %s", path, rr.Body.String())
+		require.Contains(t, rr.Body.String(), path)
+	}
+
+	// Nothing was committed: the whole request is refused, not partially applied.
+	note, err := deps.Store.GetNote(ctx, "r1", "notes/a.md")
+	require.NoError(t, err)
+	require.Nil(t, note)
+	out, err := exec.Command("git", "-C", bareURL, "show", "HEAD:notes/a.md").CombinedOutput()
+	require.Error(t, err, "notes/a.md must not exist in git: %s", out)
+}
+
 // An oversized data file is dropped from the commit rather than failing the
 // whole sync, but the client must be told: the response's skipped_paths is
 // the only signal that a file it sent never reached git.

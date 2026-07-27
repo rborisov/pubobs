@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
 
@@ -89,7 +90,12 @@ func handleListDataFiles(deps *Deps) http.HandlerFunc {
 
 		list, err := deps.Cache.ListDataFiles(r.Context(), repo, credJSON, exts, maxBytes)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "list data files failed: "+err.Error())
+			// Redacted: this error embeds git's raw stderr, and git quotes the
+			// credentialed remote URL it was handed on any clone/fetch failure
+			// ("unable to access 'https://user:token@host/...'"). This endpoint
+			// only requires the reader role — deliberately lower-privileged
+			// than the owner who supplied that credential.
+			writeError(w, http.StatusBadGateway, "list data files failed: "+gitcache.Redact(err.Error()))
 			return
 		}
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)

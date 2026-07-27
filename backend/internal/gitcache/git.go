@@ -586,9 +586,14 @@ func (g *GitRunner) ListFilesByExt(dir string, exts []string) ([]string, error) 
 	if len(exts) == 0 {
 		return nil, nil
 	}
+	// ":(icase)" makes the pathspec case-insensitive. Without it git uses
+	// case-sensitive fnmatch, so a vault file named TABLE.CSV would be pushed
+	// into the repo by the plugin (whose isDataFilePath lowercases the
+	// extension before matching) and then never listed back — syncing one way
+	// only, permanently missing remote updates.
 	args := []string{"ls-files", "-z", "--"}
 	for _, e := range exts {
-		args = append(args, "*."+e)
+		args = append(args, ":(icase)*."+e)
 	}
 	out, err := g.run(dir, args...)
 	if err != nil {

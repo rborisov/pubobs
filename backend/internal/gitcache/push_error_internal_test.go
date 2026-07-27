@@ -65,6 +65,37 @@ fatal: Authentication failed for 'https://git.example.com/u/r.git/'`))
 	require.NotErrorIs(t, got, ErrGitNonFastForward)
 }
 
+// A failure that is BOTH an auth failure and a remote rejection must satisfy
+// errors.Is for both sentinels. classifyPushError used to wrap the inner error
+// with %v, which severed the chain and discarded the ErrGitAuthFailed identity
+// — and Cache.recordGitOpResult keys the auth-failure backoff off exactly that
+// errors.Is check, so losing it makes a doomed network operation re-run on
+// every request instead of backing off.
+func TestClassifyPushError_authFailureAndRejectionKeepsBothSentinels(t *testing.T) {
+	err := classifyGitError(errors.New(`git push: exit status 128
+remote: Gitea: User permission denied for writing.
+fatal: Authentication failed for 'https://git.example.com/u/r.git/'
+ ! [remote rejected] HEAD -> main (pre-receive hook declined)`))
+	require.ErrorIs(t, err, ErrGitAuthFailed, "precondition: classifyGitError marks this as an auth failure")
+
+	got := classifyPushError(err)
+	require.ErrorIs(t, got, ErrGitPushRejected)
+	require.ErrorIs(t, got, ErrGitAuthFailed)
+}
+
+// Same requirement for the non-fast-forward branch, which wraps with the same
+// verb and so had the same defect.
+func TestClassifyPushError_authFailureAndNonFastForwardKeepsBothSentinels(t *testing.T) {
+	err := classifyGitError(errors.New(`git push: exit status 128
+fatal: Authentication failed for 'https://git.example.com/u/r.git/'
+ ! [rejected] HEAD -> main (non-fast-forward)`))
+	require.ErrorIs(t, err, ErrGitAuthFailed)
+
+	got := classifyPushError(err)
+	require.ErrorIs(t, got, ErrGitNonFastForward)
+	require.ErrorIs(t, got, ErrGitAuthFailed)
+}
+
 func TestClassifyPushError_unrelatedErrorUntouched(t *testing.T) {
 	err := errors.New("git push: exit status 128\nfatal: unable to access: Could not resolve host")
 	got := classifyPushError(err)

@@ -109,6 +109,18 @@ func handleSync(deps *Deps) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "invalid path: "+d.Path)
 				return
 			}
+			// A .md path must never arrive as a data file. The data-file write
+			// bypasses the note pipeline entirely, so it would put new content
+			// in git while the note row, snapshot and render blob keep the old
+			// one — a permanent disagreement between the reader and the repo.
+			// (And when the same path appears in both lists, the data-file
+			// write is appended to cacheFiles last and silently wins.) The list
+			// endpoint already refuses "md" as an extension; this is the same
+			// rule on the write path, which only the plugin enforced so far.
+			if strings.HasSuffix(strings.ToLower(d.Path), ".md") {
+				writeError(w, http.StatusBadRequest, "md files sync as notes, not data files: "+d.Path)
+				return
+			}
 		}
 
 		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)

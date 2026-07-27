@@ -73,7 +73,12 @@ func (c *Cache) ListDataFiles(ctx context.Context, repo *model.Repo, credJSON st
 	}
 
 	for _, p := range paths {
-		if strings.HasPrefix(p, "_pubobs/") || strings.HasSuffix(p, ".md") {
+		// The .md test is case-insensitive because ListFilesByExt's pathspec is
+		// (":(icase)"): a repo file named NOTE.MD now matches an "md" ext where
+		// it previously didn't, and this guard — the one thing keeping a note
+		// out of the data-file list — must not be the part that stays
+		// case-sensitive.
+		if strings.HasPrefix(p, "_pubobs/") || strings.HasSuffix(strings.ToLower(p), ".md") {
 			continue
 		}
 		full := filepath.Join(dir, p)

@@ -62,15 +62,22 @@ func classifyPushError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// Both verbs are %w so the classification is *added* to whatever the inner
+	// error already was rather than replacing it. Using %v for the inner error
+	// severed its chain: an ErrGitAuthFailed whose text also matched a
+	// push-rejected pattern lost that identity, and Cache.recordGitOpResult
+	// keys the auth-failure backoff off errors.Is(err, ErrGitAuthFailed) — so
+	// a doomed network operation would stop backing off and re-run on every
+	// request.
 	lower := strings.ToLower(err.Error())
 	for _, pat := range nonFastForwardPatterns {
 		if strings.Contains(lower, pat) {
-			return fmt.Errorf("%w: %v", ErrGitNonFastForward, err)
+			return fmt.Errorf("%w: %w", ErrGitNonFastForward, err)
 		}
 	}
 	for _, pat := range pushRejectedPatterns {
 		if strings.Contains(lower, pat) {
-			return fmt.Errorf("%w: %v", ErrGitPushRejected, err)
+			return fmt.Errorf("%w: %w", ErrGitPushRejected, err)
 		}
 	}
 	return err

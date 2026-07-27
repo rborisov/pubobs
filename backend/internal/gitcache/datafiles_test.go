@@ -81,6 +81,54 @@ func TestListDataFiles(t *testing.T) {
 	}
 }
 
+// The plugin's isDataFilePath lowercases a file's extension before matching,
+// so a vault file named TABLE.CSV is pushed into the repo as a data file. If
+// the listing side stayed case-sensitive (git's default fnmatch pathspec) that
+// file would sync one way only and never receive remote updates. Distinct base
+// names are used deliberately: t.TempDir() is case-insensitive on macOS, so
+// "table.csv" and "TABLE.CSV" would collide on disk.
+func TestListDataFiles_matchesExtensionCaseInsensitively(t *testing.T) {
+	bare := seedDataRepo(t, map[string]string{
+		"data/table.csv":  "a,b\n1,2\n",
+		"data/UPPER.CSV":  "c,d\n3,4\n",
+		"data/Mixed.Json": "{\"k\":1}\n",
+	})
+	repo := &model.Repo{ID: "r1", RemoteURL: bare, DefaultBranch: "main"}
+	c := gitcache.NewCache(t.TempDir())
+
+	got, err := c.ListDataFiles(context.Background(), repo, "", []string{"csv", "json"}, 5<<20)
+	require.NoError(t, err)
+
+	paths := map[string]string{}
+	for _, f := range got.Files {
+		paths[f.Path] = f.Content
+	}
+	require.Contains(t, paths, "data/table.csv")
+	require.Contains(t, paths, "data/UPPER.CSV", "an uppercase extension must still be listed")
+	require.Contains(t, paths, "data/Mixed.Json", "a mixed-case extension must still be listed")
+	require.Equal(t, "c,d\n3,4\n", paths["data/UPPER.CSV"])
+}
+
+// Notes are excluded from the data-file list by suffix, and that exclusion has
+// to be case-insensitive now that the pathspec is: an "md" ext never reaches
+// here through the HTTP layer (parseDataFileExts refuses it), but the guard is
+// what keeps a note out of the list if it ever did.
+func TestListDataFiles_excludesNotesRegardlessOfCase(t *testing.T) {
+	bare := seedDataRepo(t, map[string]string{
+		"note.md":  "# Note",
+		"OTHER.MD": "# Other",
+		"a.csv":    "x\n",
+	})
+	repo := &model.Repo{ID: "r1", RemoteURL: bare, DefaultBranch: "main"}
+	c := gitcache.NewCache(t.TempDir())
+
+	got, err := c.ListDataFiles(context.Background(), repo, "", []string{"md", "csv"}, 5<<20)
+	require.NoError(t, err)
+
+	require.Len(t, got.Files, 1)
+	require.Equal(t, "a.csv", got.Files[0].Path)
+}
+
 func TestListDataFiles_skipsOversized(t *testing.T) {
 	big := strings.Repeat("x", 2048)
 	bare := seedDataRepo(t, map[string]string{
