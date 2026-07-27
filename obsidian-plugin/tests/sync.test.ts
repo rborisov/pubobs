@@ -566,7 +566,16 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
 
   function makeMockFile(path: string) {
     const base = path.slice(path.lastIndexOf('/') + 1);
-    return { path, extension: 'md', basename: base.replace(/\.md$/, '') };
+    const dot = base.lastIndexOf('.');
+    // Every existing caller of this helper passes a .md path, so deriving the
+    // real extension (rather than the previous hardcoded 'md') is a no-op for
+    // them. It matters once data-file tests pass non-.md paths through the
+    // same helper: sync.ts's note-phase filter checks f.extension === 'md',
+    // and a csv/base file wrongly tagged 'md' would be swept into the note
+    // pipeline (and its 4s metadata-readiness wait) instead of being left for
+    // the data-file loop.
+    const extension = dot >= 0 ? base.slice(dot + 1) : '';
+    return { path, extension, basename: base.replace(/\.md$/, '') };
   }
 
   // Mimics Obsidian's MetadataCache: getFileCache returns null for a file
@@ -607,6 +616,7 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
   function makeMockClient() {
     return {
       listFiles: jest.fn().mockResolvedValue([]),
+      listDataFiles: jest.fn().mockResolvedValue({ files: [], skipped: [] }),
       getNoteKey: jest.fn().mockResolvedValue(KEY),
       sync: jest.fn().mockResolvedValue({ commit_sha: 'abc1234567890', note_keys: {} }),
     };
@@ -618,6 +628,8 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
       pullSHAs: {},
       syncHashes: {},
       noteKeys: {} as Record<string, Record<string, string>>,
+      dataFileExtensions: 'base, csv, json, yaml, yml',
+      dataFileMaxMB: 5,
     };
   }
 
@@ -715,5 +727,93 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
   test('strict mode with no credential configured still shows the Settings hint', async () => {
     const notices = await syncWith403('configure your git credential for this repo before publishing');
     expect(notices.some(n => n.includes('Settings before publishing'))).toBe(true);
+  });
+
+  test('data files under the vault folder are pushed alongside notes', async () => {
+    const note = makeMockFile('Published/notes/a.md');
+    const csv = makeMockFile('Published/data/table.csv');
+    const base = makeMockFile('Published/views/tasks.base');
+    const outside = makeMockFile('Elsewhere/other.csv');
+    const ignored = makeMockFile('Published/notes.txt');
+    const metadataCache = makeMetadataCache(new Set([note.path]));
+    const app = makeMockApp([note, csv, base, outside, ignored], metadataCache);
+    app.vault.read = jest.fn((f: { path: string }) =>
+      Promise.resolve(f.path.endsWith('.md') ? '# Hello' : 'a,b\n1,2\n'));
+    const client = makeMockClient();
+
+    const manager = new SyncManager(app as any, client as any, makeSettings() as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    const dataFiles = (client.sync as jest.Mock).mock.calls[0][4];
+    const paths = dataFiles.map((d: { path: string }) => d.path).sort();
+    expect(paths).toEqual(['data/table.csv', 'views/tasks.base']);
+    expect(dataFiles[0].content).toBe('a,b\n1,2\n');
+  });
+
+  // The deletion trap: a data file that exists in both the vault and the repo
+  // must never be reported as deleted just because the note enumeration
+  // doesn't see it.
+  test('an unchanged data file is never reported as deleted', async () => {
+    const csv = makeMockFile('Published/data/table.csv');
+    const metadataCache = makeMetadataCache(new Set([csv.path]));
+    const app = makeMockApp([csv], metadataCache);
+    app.vault.read = jest.fn().mockResolvedValue('a,b\n1,2\n');
+    const client = makeMockClient();
+    const settings = makeSettings();
+    // Simulate a previous sync having recorded this data file.
+    settings.syncHashes = { 'repo-1': { 'data/table.csv': 'stale-hash' } } as any;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
+    expect(deletedPaths).toEqual([]);
+  });
+
+  test('a data file removed from the vault is reported as deleted', async () => {
+    const metadataCache = makeMetadataCache();
+    const app = makeMockApp([], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    settings.syncHashes = { 'repo-1': { 'data/gone.csv': 'h' } } as any;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
+    expect(deletedPaths).toEqual(['data/gone.csv']);
+  });
+
+  test('an oversized data file is skipped with a Notice naming it', async () => {
+    const csv = makeMockFile('Published/data/huge.csv');
+    const metadataCache = makeMetadataCache(new Set([csv.path]));
+    const app = makeMockApp([csv], metadataCache);
+    app.vault.read = jest.fn().mockResolvedValue('x'.repeat(2 * 1024 * 1024));
+    const client = makeMockClient();
+    const settings = makeSettings();
+    settings.dataFileMaxMB = 1;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(getNotices().some(n => n.includes('huge.csv') && n.includes('too large'))).toBe(true);
+    // The oversized file was the only candidate, so there is nothing left to
+    // send and the sync request is never made.
+    expect(client.sync).not.toHaveBeenCalled();
+  });
+
+  test('no data file types configured means notes-only behavior', async () => {
+    const note = makeMockFile('Published/notes/a.md');
+    const csv = makeMockFile('Published/data/table.csv');
+    const metadataCache = makeMetadataCache(new Set([note.path]));
+    const app = makeMockApp([note, csv], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    settings.dataFileExtensions = '';
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect((client.sync as jest.Mock).mock.calls[0][4]).toEqual([]);
   });
 });

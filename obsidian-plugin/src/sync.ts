@@ -1,7 +1,8 @@
 import { App, TFile, Notice, Modal, parseYaml, stringifyYaml } from 'obsidian';
-import type { BackendClient, SyncFile, SyncAsset } from './client';
+import type { BackendClient, SyncFile, SyncAsset, SyncDataFile } from './client';
 import type { PubObsSettings } from './types';
 import { renderNoteToHTML, extractStyles } from './renderer';
+import { parseDataFileExtensions, isDataFilePath, utf8ByteLength } from './datafiles';
 
 // ── Exported helpers ─────────────────────────────────────────────────────────
 
@@ -312,6 +313,65 @@ export class SyncManager {
         new Notice(`PubObs: skipped "${f.basename}" — ${reason}`, 10000);
       }
     }
+
+    // ── Data files ────────────────────────────────────────────────────────────
+    // Enumerated here, in the same phase as notes, because currentRepoPaths
+    // drives deletion detection: a path known from a previous sync but missing
+    // from this set is reported in deletedPaths and removed from the repo.
+    // Data files live in the same syncHashes map as notes, so if they were not
+    // registered here every one of them would be deleted on the next sync.
+    const dataExts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
+    const dataMaxBytes = Math.max(1, this.settings.dataFileMaxMB ?? 5) * 1024 * 1024;
+    const syncDataFiles: SyncDataFile[] = [];
+    const oversized: string[] = [];
+
+    if (dataExts.length > 0) {
+      const vaultDataFiles = this.app.vault
+        .getFiles()
+        .filter((f: TFile) =>
+          isDataFilePath(f.path, dataExts) &&
+          (vaultFolder === '' || f.path.startsWith(vaultFolder + '/')));
+
+      for (const f of vaultDataFiles) {
+        let relative = f.path;
+        if (vaultFolder && relative.startsWith(vaultFolder + '/')) {
+          relative = relative.slice(vaultFolder.length + 1);
+        }
+        const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
+        currentRepoPaths.add(repoPath);
+
+        try {
+          const content = await this.app.vault.read(f);
+          const bytes = utf8ByteLength(content);
+          if (bytes > dataMaxBytes) {
+            oversized.push(`${f.path} (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+            // Deliberately keep the previous hash: not sending the file must
+            // not look like "unchanged" next time either.
+            newHashes[repoPath] = storedHashes[repoPath] ?? '';
+            continue;
+          }
+          const hash = fnv1a(content);
+          newHashes[repoPath] = hash;
+          if (!force && storedHashes[repoPath] === hash) {
+            skipped++;
+            continue;
+          }
+          syncDataFiles.push({ path: repoPath, content });
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          failedFiles.push({ path: f.path, reason });
+          console.error(`[PubObs] failed to read data file "${f.path}": ${reason}`, e);
+        }
+      }
+    }
+
+    if (oversized.length > 0) {
+      new Notice(
+        `PubObs: ${oversized.length} data file(s) too large for the ${this.settings.dataFileMaxMB} MB limit — ${oversized.join(', ')}`,
+        10000,
+      );
+    }
+
     notice.hide();
 
     // Paths this vault previously pushed, pulled, or minted a key for but
@@ -355,7 +415,7 @@ export class SyncManager {
       ? `, ${failedFiles.length} skipped due to errors (see console)`
       : '';
 
-    if (syncFiles.length === 0 && deletedPaths.length === 0) {
+    if (syncFiles.length === 0 && syncDataFiles.length === 0 && deletedPaths.length === 0) {
       if (failedFiles.length > 0) {
         new Notice(`PubObs: nothing changed (${skipped} note(s) up to date${failedSuffix})`);
       } else {
@@ -366,7 +426,7 @@ export class SyncManager {
 
     console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged, ${failedFiles.length} failed`);
     try {
-      const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
+      const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths, syncDataFiles);
 
       // The backend is the sole authority on each note's key — always
       // overwrite our local cache with whatever it just returned, even for
@@ -385,7 +445,17 @@ export class SyncManager {
       this.settings.syncHashes[repoId] = newHashes;
       await this.saveSettings();
 
-      new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
+      const dataSuffix = syncDataFiles.length > 0 ? `, ${syncDataFiles.length} data file(s)` : '';
+      new Notice(`PubObs: ${syncFiles.length} synced${dataSuffix}, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
+
+      // The server enforces its own 25 MB ceiling regardless of this client's
+      // setting, and reports anything it dropped. A sync that "succeeded"
+      // while quietly omitting a file from the commit is exactly the case
+      // this surfaces — never let it pass silently.
+      if (result.skipped_paths && result.skipped_paths.length > 0) {
+        const names = result.skipped_paths.map(s => s.path).join(', ');
+        new Notice(`PubObs: the server skipped ${result.skipped_paths.length} file(s) — ${names}`, 10000);
+      }
     } catch (e) {
       const err = e as any;
       const reason = e instanceof Error ? e.message : String(e);
