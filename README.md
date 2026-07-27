@@ -313,6 +313,21 @@ After first boot, manage storage from the admin panel:
 
 Download `main.js` and `manifest.json` from the [latest release](https://github.com/rborisov/pubobs/releases/latest) and copy them to `.obsidian/plugins/pubobs/` in your vault.
 
+### Data files
+
+Besides notes, PubObs syncs non-markdown files both ways — Obsidian Bases
+(`.base`), CSV, JSON and YAML by default. Two plugin settings control this:
+
+- **Data file types** — comma-separated extensions. Empty means notes only.
+- **Data file size limit (MB)** — default 5. Larger files are skipped in both
+  directions and named in the sync report. The server caps this at 25 MB.
+
+Data files are stored in git alongside your notes but are never published:
+they get no note row, no encryption key and no rendered HTML, so they never
+appear in the reader or the notes list. Removing an extension from the
+setting only stops future syncing of that file type — it never deletes
+matching files already in the repo.
+
 ---
 
 ## Development
