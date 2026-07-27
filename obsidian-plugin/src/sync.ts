@@ -389,11 +389,15 @@ export class SyncManager {
     } catch (e) {
       const err = e as any;
       const reason = e instanceof Error ? e.message : String(e);
-      // A 403 can mean either strict-mode "no git credential configured" or an
-      // ordinary authorization denial (e.g. the editor role was revoked). Only
-      // the former mentions a credential, so match the message too — otherwise
-      // show the real reason rather than a misleading "configure credential".
-      if (err?.status === 403 && /credential/i.test(reason)) {
+      // A 403 can mean strict-mode "no git credential configured", an ordinary
+      // authorization denial (e.g. the editor role was revoked), or the git
+      // remote refusing the push (a token without write access to this repo, a
+      // protected branch). Only the first is fixed in Settings, and it is the
+      // only one phrased as an instruction to configure one — so match that
+      // wording specifically. A looser /credential/i test also swallowed the
+      // remote-refusal message, whose quoted reason from the git host is the
+      // only thing that says what actually needs fixing.
+      if (err?.status === 403 && /configure your git credential/i.test(reason)) {
         new Notice(`PubObs: configure your git credential for "${mapping.repoName}" in Settings before publishing.`, 10000);
       } else {
         console.error('[PubObs] sync failed:', e);

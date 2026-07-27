@@ -683,4 +683,37 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
 
     expect(getNotices().some(n => n.includes('bad') && n.includes('skipped') && n.includes('boom'))).toBe(true);
   });
+
+  // The backend returns 403 for two unrelated things: "you haven't configured
+  // a git credential yet" (fixed in Settings) and "the git host refused the
+  // push" (fixed on the git host — a token that can't write to this repo, a
+  // protected branch). Only the first is worth replacing with the Settings
+  // hint; doing it for the second hides the remote's quoted explanation, which
+  // is the only part that says what to fix.
+  async function syncWith403(message: string): Promise<string[]> {
+    const file = makeMockFile('Published/notes/a.md');
+    const metadataCache = makeMetadataCache(new Set([file.path]));
+    const app = makeMockApp([file], metadataCache);
+    const client = makeMockClient();
+    const err = new Error(message);
+    (err as unknown as { status: number }).status = 403;
+    (client.sync as jest.Mock).mockRejectedValue(err);
+
+    const manager = new SyncManager(app as any, client as any, makeSettings() as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+    return getNotices();
+  }
+
+  test('a push refused by the git remote shows the remote reason, not the Settings hint', async () => {
+    const notices = await syncWith403(
+      'the git remote refused the push to main — check that the git credential used for this repo has write access to it. Remote said: User permission denied for writing.',
+    );
+    expect(notices.some(n => n.includes('User permission denied for writing.'))).toBe(true);
+    expect(notices.some(n => n.includes('in Settings before publishing'))).toBe(false);
+  });
+
+  test('strict mode with no credential configured still shows the Settings hint', async () => {
+    const notices = await syncWith403('configure your git credential for this repo before publishing');
+    expect(notices.some(n => n.includes('Settings before publishing'))).toBe(true);
+  });
 });

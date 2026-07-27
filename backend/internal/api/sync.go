@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -144,11 +145,7 @@ func handleSync(deps *Deps) http.HandlerFunc {
 
 		sha, err := deps.Cache.Sync(r.Context(), repo, ownerCred, pushCred, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg, authorName, authorEmail)
 		if err != nil {
-			if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "rejected") {
-				writeError(w, http.StatusConflict, "push rejected: pull first, then sync")
-				return
-			}
-			writeError(w, http.StatusBadGateway, "sync failed: "+err.Error())
+			writeSyncError(w, repo.DefaultBranch, err)
 			return
 		}
 
@@ -219,6 +216,56 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			"commit_sha": sha,
 			"note_keys":  noteKeys,
 		})
+	}
+}
+
+// writeSyncError maps a failed Cache.Sync onto a status and a message the
+// person syncing can act on.
+//
+// The previous implementation matched the substring "rejected" anywhere in
+// git's output and reported every hit as `push rejected: pull first, then
+// sync`. That single line collapsed three unrelated failures — a token
+// without write access, a protected/hook-guarded branch, and a genuine
+// non-fast-forward — into the one diagnosis that is almost never the real
+// cause here: Sync fetches and hard-resets to the remote tip immediately
+// before it commits (getOrClone → FetchReset), so the local clone cannot be
+// *persistently* behind the remote. It also advised a remedy that does not
+// exist in this product — there is no user-facing "pull" of git history to
+// perform — which is what made a brand-new repo whose credential simply
+// could not write look like a merge conflict.
+//
+// Reasons are taken from gitcache.PushRejectionReason, which is scrubbed of
+// the credentials embedded in the remote URL; raw err.Error() is never sent
+// to the client for the same reason.
+func writeSyncError(w http.ResponseWriter, branch string, err error) {
+	if branch == "" {
+		branch = "the default branch"
+	}
+	reason := gitcache.PushRejectionReason(err)
+
+	switch {
+	case errors.Is(err, gitcache.ErrGitNonFastForward):
+		msg := fmt.Sprintf("the remote %s moved while this sync was in flight — sync again", branch)
+		if reason != "" {
+			msg += " (" + reason + ")"
+		}
+		writeError(w, http.StatusConflict, msg)
+
+	case errors.Is(err, gitcache.ErrGitPushRejected):
+		msg := fmt.Sprintf("the git remote refused the push to %s — check that the git credential used for this repo has write access to it", branch)
+		if reason != "" {
+			msg += ". Remote said: " + reason
+		}
+		writeError(w, http.StatusForbidden, msg)
+
+	case errors.Is(err, gitcache.ErrGitAuthFailed):
+		writeError(w, http.StatusForbidden, "the git remote rejected the credential for this repo — check the stored git credential")
+
+	case errors.Is(err, gitcache.ErrGitOpTimedOut):
+		writeError(w, http.StatusGatewayTimeout, "the git remote did not respond in time — try again")
+
+	default:
+		writeError(w, http.StatusBadGateway, "sync failed: "+gitcache.Redact(err.Error()))
 	}
 }
 

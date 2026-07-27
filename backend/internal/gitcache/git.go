@@ -408,7 +408,7 @@ func (g *GitRunner) LsRemote(remoteURL, credJSON string) error {
 func (g *GitRunner) PushDryRun(dir, remoteURL, credJSON, branch string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
 	_, err := g.runNetwork(dir, g.fetchTimeout(), "push", "--dry-run", authedURL, "HEAD:"+branch)
-	return err
+	return classifyPushError(err)
 }
 
 // dubiousOwnershipMarker is the substring git (2.35.2+) prints when it
@@ -512,7 +512,7 @@ func (g *GitRunner) InitializeIfEmpty(dir, remoteURL, credJSON, branch string) e
 	}
 	authedURL := credentialedURL(remoteURL, credJSON)
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
-		return fmt.Errorf("initial push: %w", err)
+		return fmt.Errorf("initial push: %w", classifyPushError(err))
 	}
 	return nil
 }
@@ -544,7 +544,7 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, pushCredJSON, branch, message,
 	}
 	authedURL := credentialedURL(remoteURL, pushCredJSON)
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
-		return "", err
+		return "", classifyPushError(err)
 	}
 	// Bound loose-object growth. A repo that's synced/commented on regularly
 	// never idles long enough to be evicted, so without this every commit's
