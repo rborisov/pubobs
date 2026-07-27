@@ -129,11 +129,21 @@ func handleSync(deps *Deps) http.HandlerFunc {
 				MDContent: f.MDContent,
 			})
 		}
+		// skippedPaths is reported back to the client so a data file that
+		// silently vanished from the commit isn't mistaken for one that
+		// synced. Initialized non-nil so it serializes as [] rather than
+		// null when nothing is skipped.
+		skippedPaths := []gitcache.SkippedDataFile{}
 		for _, d := range payload.DataFiles {
 			// Re-enforced server-side: the client's own cap is a setting, not
 			// a guarantee.
 			if len(d.Content) > gitcache.MaxDataFileBytes {
 				fmt.Printf("sync %s: skipping oversized data file %s (%d bytes)\n", repoID, d.Path, len(d.Content))
+				skippedPaths = append(skippedPaths, gitcache.SkippedDataFile{
+					Path:   d.Path,
+					Size:   int64(len(d.Content)),
+					Reason: "too_large",
+				})
 				continue
 			}
 			cacheFiles = append(cacheFiles, gitcache.SyncFile{
@@ -268,8 +278,9 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"commit_sha": sha,
-			"note_keys":  noteKeys,
+			"commit_sha":    sha,
+			"note_keys":     noteKeys,
+			"skipped_paths": skippedPaths,
 		})
 	}
 }
