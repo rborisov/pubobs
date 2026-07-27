@@ -575,9 +575,34 @@ func (g *GitRunner) ListFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitNUL(out), nil
+}
+
+// ListFilesByExt returns tracked file paths whose extension is in exts (given
+// without a leading dot, e.g. "csv"). Uses the same -z NUL-delimited output as
+// ListFiles, for the same reason: git otherwise C-quotes and octal-escapes any
+// path containing non-ASCII bytes.
+func (g *GitRunner) ListFilesByExt(dir string, exts []string) ([]string, error) {
+	if len(exts) == 0 {
+		return nil, nil
+	}
+	args := []string{"ls-files", "-z", "--"}
+	for _, e := range exts {
+		args = append(args, "*."+e)
+	}
+	out, err := g.run(dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	return splitNUL(out), nil
+}
+
+// splitNUL parses git's -z output into paths, dropping the trailing empty
+// element left by the final NUL terminator.
+func splitNUL(out string) []string {
 	out = strings.TrimSuffix(out, "\x00")
 	if out == "" {
-		return nil, nil
+		return nil
 	}
 	parts := strings.Split(out, "\x00")
 	files := make([]string, 0, len(parts))
@@ -586,7 +611,7 @@ func (g *GitRunner) ListFiles(dir string) ([]string, error) {
 			files = append(files, p)
 		}
 	}
-	return files, nil
+	return files
 }
 
 // ReadFile returns the content of a tracked file at HEAD.
