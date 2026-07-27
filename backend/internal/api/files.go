@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pubobs/backend/internal/auth"
+	"github.com/pubobs/backend/internal/gitcache"
 	"github.com/pubobs/backend/internal/model"
 )
 
@@ -32,7 +33,11 @@ func handleListFiles(deps *Deps) http.HandlerFunc {
 
 		entries, err := deps.Cache.ListFiles(r.Context(), repo, credJSON)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "list files failed: "+err.Error())
+			// Redacted for the same reason as handleListDataFiles: this error
+			// carries git's raw stderr, which quotes the credentialed remote
+			// URL on any clone/fetch failure, and reader role is all it takes
+			// to reach this handler.
+			writeError(w, http.StatusBadGateway, "list files failed: "+gitcache.Redact(err.Error()))
 			return
 		}
 		if entries == nil {

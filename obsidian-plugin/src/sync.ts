@@ -1,7 +1,8 @@
 import { App, TFile, Notice, Modal, parseYaml, stringifyYaml } from 'obsidian';
-import type { BackendClient, SyncFile, SyncAsset } from './client';
+import type { BackendClient, SyncFile, SyncAsset, SyncDataFile } from './client';
 import type { PubObsSettings } from './types';
 import { renderNoteToHTML, extractStyles } from './renderer';
+import { parseDataFileExtensions, isDataFilePath, utf8ByteLength } from './datafiles';
 
 // ── Exported helpers ─────────────────────────────────────────────────────────
 
@@ -204,6 +205,7 @@ export class SyncManager {
       }
 
       let pulled = 0;
+      let pulledData = 0;
       for (const file of toPull) {
         const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
         const dir = vaultPath.split('/').slice(0, -1).join('/');
@@ -222,6 +224,94 @@ export class SyncManager {
       this.settings.pullSHAs[repoId] = storedPullSHAs;
       await this.saveSettings();
 
+      // Data files are pulled in their own try/catch: a backend that predates
+      // this feature returns 404 here, and that must degrade to notes-only
+      // syncing rather than failing the whole pull.
+      let dataFilesListed = false;
+      try {
+        const exts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
+        if (exts.length > 0) {
+          const maxBytes = Math.max(1, this.settings.dataFileMaxMB ?? 5) * 1024 * 1024;
+          const { files: dataFiles, skipped } = await this.client.listDataFiles(repoId, exts, maxBytes);
+          dataFilesListed = true;
+
+          for (const file of dataFiles) {
+            // Isolate each file: one file that fails to read/write must not
+            // abort the rest of the loop (and, critically, must not skip the
+            // saveSettings below — a file already written to disk needs its
+            // pullSHAs entry persisted too, or it gets re-pulled or wrongly
+            // treated as a deletion candidate next run).
+            try {
+              if (storedPullSHAs[file.path] === file.sha) continue;
+
+              const vaultPath = repoPathToVaultPath(file.path, vaultFolder, subfolder);
+              const existing = this.app.vault.getAbstractFileByPath(vaultPath);
+              if (existing instanceof TFile) {
+                // Same protection notes get: never overwrite edits that were
+                // made locally and haven't been pushed yet.
+                const localContent = await this.app.vault.read(existing);
+                const lastSyncedHash = (this.settings.syncHashes[repoId] ?? {})[file.path];
+                if (lastSyncedHash !== undefined && fnv1a(localContent) !== lastSyncedHash) {
+                  continue;
+                }
+                await this.app.vault.modify(existing, file.content);
+              } else if (
+                (this.settings.syncHashes[repoId] ?? {})[file.path] !== undefined
+                || (this.settings.pullSHAs[repoId] ?? {})[file.path] !== undefined
+              ) {
+                // Same pending-deletion handling as notes above: no local file
+                // exists at this path, but this vault previously pushed or
+                // pulled it — its absence means a local deletion that hasn't
+                // reached the remote yet, not new content to resurrect. Drop
+                // the stale pull-SHA and let the push phase's deletion
+                // detection (currentRepoPaths vs. knownPaths) report it.
+                delete storedPullSHAs[file.path];
+                continue;
+              } else {
+                const dir = vaultPath.split('/').slice(0, -1).join('/');
+                if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+                  await this.app.vault.createFolder(dir);
+                }
+                await this.app.vault.create(vaultPath, file.content);
+              }
+              storedPullSHAs[file.path] = file.sha;
+              pulledData++;
+            } catch (e) {
+              const reason = e instanceof Error ? e.message : String(e);
+              console.error(`[PubObs] failed to pull data file "${file.path}": ${reason}`, e);
+              new Notice(`PubObs: skipped pulling "${file.path}" — ${reason}`, 10000);
+            }
+          }
+
+          if (skipped.length > 0) {
+            const names = skipped.map(s => `${s.path} (${s.reason === 'too_large' ? 'too large' : 'not text'})`);
+            new Notice(`PubObs: ${skipped.length} data file(s) skipped — ${names.join(', ')}`, 10000);
+          }
+
+          this.settings.pullSHAs[repoId] = storedPullSHAs;
+          await this.saveSettings();
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        // A 404 means this backend predates the data-files feature entirely —
+        // an expected, benign state for an older server, not something to
+        // alarm the user about on every single sync. Log it and move on.
+        if ((e as { status?: number })?.status === 404) {
+          console.log('[PubObs] backend has no /data-files endpoint — skipping data file pull');
+        } else if (dataFilesListed) {
+          // The list succeeded and files may already be written to the vault
+          // (per-file failures above are isolated and don't reach here) — what
+          // actually failed here is persisting pullSHAs, not the data file
+          // sync itself, so say that rather than the more alarming "not
+          // synced".
+          console.error('[PubObs] failed to save data file sync state:', e);
+          new Notice(`PubObs: data files pulled but sync state not saved — ${reason}`, 10000);
+        } else {
+          console.error('[PubObs] data file pull failed:', e);
+          new Notice(`PubObs: data files not synced — ${reason}`, 10000);
+        }
+      }
+
       if (incompatible.length > 0) {
         await new Promise<void>(resolve => {
           new IncompatibleNotesModal(
@@ -238,7 +328,9 @@ export class SyncManager {
         });
       }
 
-      if (pulled > 0) notice.setMessage(`PubObs: pulled ${pulled} note(s), pushing local changes…`);
+      if (pulled > 0 || pulledData > 0) {
+        notice.setMessage(`PubObs: pulled ${pulled} note(s), ${pulledData} data file(s), pushing local changes…`);
+      }
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.error('[PubObs] pull phase failed:', e);
@@ -312,6 +404,67 @@ export class SyncManager {
         new Notice(`PubObs: skipped "${f.basename}" — ${reason}`, 10000);
       }
     }
+
+    // ── Data files ────────────────────────────────────────────────────────────
+    // Enumerated here, in the same phase as notes, because currentRepoPaths
+    // drives deletion detection: a path known from a previous sync but missing
+    // from this set is reported in deletedPaths and removed from the repo.
+    // Data files live in the same syncHashes map as notes, so if they were not
+    // registered here every one of them would be deleted on the next sync.
+    const dataExts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
+    const dataMaxMB = this.settings.dataFileMaxMB ?? 5;
+    const dataMaxBytes = Math.max(1, dataMaxMB) * 1024 * 1024;
+    const syncDataFiles: SyncDataFile[] = [];
+    const oversized: string[] = [];
+
+    if (dataExts.length > 0) {
+      const vaultDataFiles = this.app.vault
+        .getFiles()
+        .filter((f: TFile) =>
+          isDataFilePath(f.path, dataExts) &&
+          (vaultFolder === '' || f.path.startsWith(vaultFolder + '/')));
+
+      for (const f of vaultDataFiles) {
+        let relative = f.path;
+        if (vaultFolder && relative.startsWith(vaultFolder + '/')) {
+          relative = relative.slice(vaultFolder.length + 1);
+        }
+        const repoPath = subfolder ? `${subfolder.replace(/\/$/, '')}/${relative}` : relative;
+        currentRepoPaths.add(repoPath);
+
+        try {
+          const content = await this.app.vault.read(f);
+          const bytes = utf8ByteLength(content);
+          if (bytes > dataMaxBytes) {
+            oversized.push(`${f.path} (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+            // Keep the hash of what the repo actually holds, since we are
+            // not changing it: this is what makes a revert to that same
+            // last-pushed content compare equal and correctly skip next time.
+            newHashes[repoPath] = storedHashes[repoPath] ?? '';
+            continue;
+          }
+          const hash = fnv1a(content);
+          newHashes[repoPath] = hash;
+          if (!force && storedHashes[repoPath] === hash) {
+            skipped++;
+            continue;
+          }
+          syncDataFiles.push({ path: repoPath, content });
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          failedFiles.push({ path: f.path, reason });
+          console.error(`[PubObs] failed to read data file "${f.path}": ${reason}`, e);
+        }
+      }
+    }
+
+    if (oversized.length > 0) {
+      new Notice(
+        `PubObs: ${oversized.length} data file(s) too large for the ${dataMaxMB} MB limit — ${oversized.join(', ')}`,
+        10000,
+      );
+    }
+
     notice.hide();
 
     // Paths this vault previously pushed, pulled, or minted a key for but
@@ -325,7 +478,14 @@ export class SyncManager {
     for (const p of Object.keys(this.settings.noteKeys?.[repoId] ?? {})) {
       knownPaths.add(p);
     }
-    const deletedPaths = [...knownPaths].filter(p => !currentRepoPaths.has(p));
+    const deletedPaths = [...knownPaths].filter(p => {
+      if (currentRepoPaths.has(p)) return false;
+      // A path this sync no longer enumerates is not a deletion. Narrowing or
+      // clearing the data-file extension setting means "stop syncing these",
+      // never "delete them from the repo" — a filter must not destroy data.
+      if (!p.endsWith('.md') && !isDataFilePath(p, dataExts)) return false;
+      return true;
+    });
 
     // Remove cached state for notes that no longer exist
     if (this.settings.noteKeys?.[repoId]) {
@@ -355,7 +515,7 @@ export class SyncManager {
       ? `, ${failedFiles.length} skipped due to errors (see console)`
       : '';
 
-    if (syncFiles.length === 0 && deletedPaths.length === 0) {
+    if (syncFiles.length === 0 && syncDataFiles.length === 0 && deletedPaths.length === 0) {
       if (failedFiles.length > 0) {
         new Notice(`PubObs: nothing changed (${skipped} note(s) up to date${failedSuffix})`);
       } else {
@@ -366,7 +526,7 @@ export class SyncManager {
 
     console.log(`[PubObs] syncing ${syncFiles.length} changed, ${deletedPaths.length} deleted, ${skipped} unchanged, ${failedFiles.length} failed`);
     try {
-      const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths);
+      const result = await this.client.sync(repoId, syncFiles, syncAssets, deletedPaths, syncDataFiles);
 
       // The backend is the sole authority on each note's key — always
       // overwrite our local cache with whatever it just returned, even for
@@ -382,18 +542,48 @@ export class SyncManager {
 
       // Persist hashes only after a successful sync
       for (const p of deletedPaths) delete newHashes[p];
+
+      // A file the server refused (its own 25 MB ceiling, which this client's
+      // dataFileMaxMB setting cannot raise) never reached git, so it must
+      // never be recorded as synced: newHashes already holds the hash of the
+      // content we tried to send, and persisting that would make every later
+      // sync see storedHashes[path] === hash, count the file as unchanged, and
+      // silently stop retrying it — permanently, until its content happened to
+      // change. Roll each skipped path back to what was actually last pushed
+      // (or drop it entirely if there was nothing), so the next sync re-sends
+      // it. This mirrors the client-side oversize branch above, which
+      // deliberately keeps `storedHashes[repoPath] ?? ''` for the same reason.
+      for (const s of result.skipped_paths ?? []) {
+        if (storedHashes[s.path] !== undefined) newHashes[s.path] = storedHashes[s.path];
+        else delete newHashes[s.path];
+      }
+
       this.settings.syncHashes[repoId] = newHashes;
       await this.saveSettings();
 
-      new Notice(`PubObs: ${syncFiles.length} synced, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
+      const dataSuffix = syncDataFiles.length > 0 ? `, ${syncDataFiles.length} data file(s)` : '';
+      new Notice(`PubObs: ${syncFiles.length} synced${dataSuffix}, ${deletedPaths.length} deleted, ${skipped} unchanged${failedSuffix} — ${result.commit_sha.slice(0, 7)}`);
+
+      // The server enforces its own 25 MB ceiling regardless of this client's
+      // setting, and reports anything it dropped. A sync that "succeeded"
+      // while quietly omitting a file from the commit is exactly the case
+      // this surfaces — never let it pass silently.
+      if (result.skipped_paths && result.skipped_paths.length > 0) {
+        const names = result.skipped_paths.map(s => s.path).join(', ');
+        new Notice(`PubObs: the server skipped ${result.skipped_paths.length} file(s) — ${names}`, 10000);
+      }
     } catch (e) {
       const err = e as any;
       const reason = e instanceof Error ? e.message : String(e);
-      // A 403 can mean either strict-mode "no git credential configured" or an
-      // ordinary authorization denial (e.g. the editor role was revoked). Only
-      // the former mentions a credential, so match the message too — otherwise
-      // show the real reason rather than a misleading "configure credential".
-      if (err?.status === 403 && /credential/i.test(reason)) {
+      // A 403 can mean strict-mode "no git credential configured", an ordinary
+      // authorization denial (e.g. the editor role was revoked), or the git
+      // remote refusing the push (a token without write access to this repo, a
+      // protected branch). Only the first is fixed in Settings, and it is the
+      // only one phrased as an instruction to configure one — so match that
+      // wording specifically. A looser /credential/i test also swallowed the
+      // remote-refusal message, whose quoted reason from the git host is the
+      // only thing that says what actually needs fixing.
+      if (err?.status === 403 && /configure your git credential/i.test(reason)) {
         new Notice(`PubObs: configure your git credential for "${mapping.repoName}" in Settings before publishing.`, 10000);
       } else {
         console.error('[PubObs] sync failed:', e);

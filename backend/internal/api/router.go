@@ -95,6 +95,7 @@ func BuildRouter(deps *Deps) http.Handler {
 		r.Delete("/api/repos/{id}/git-credential", handleDeleteGitCredential(deps))
 		r.Post("/api/repos/{id}/git-credential/verify", handleVerifyGitCredential(deps))
 		r.Get("/api/repos/{id}/files", handleListFiles(deps))
+		r.Get("/api/repos/{id}/data-files", handleListDataFiles(deps))
 		r.Get("/api/repos/{id}/notes", handleListNotes(deps))
 		r.Get("/api/repos/{id}/notes/*", handleNoteGet(deps))
 		r.Post("/api/repos/{id}/notes/*", handleNotePost(deps))

@@ -349,3 +349,202 @@ func TestHandleSync_writesAssetsToAssetStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("pngbytes"), data)
 }
+
+// A data file must reach git in the same commit as the notes, while creating
+// none of the note-side state: no note row (it would appear in the notes list
+// and the reader), no note key, no render blob.
+func TestHandleSync_dataFilesReachGitButAreNotNotes(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	payload := `{"files":[{"path":"note.md","md_content":"# Note","encrypted_html":"dGVzdA=="}],` +
+		`"data_files":[{"path":"data/table.csv","content":"a,b\n1,2\n"},` +
+		`{"path":"views/tasks.base","content":"filters:\n  - done\n"}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp struct {
+		CommitSHA    string                     `json:"commit_sha"`
+		NoteKeys     map[string]string          `json:"note_keys"`
+		SkippedPaths []gitcache.SkippedDataFile `json:"skipped_paths"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotEmpty(t, resp.CommitSHA)
+	require.Contains(t, resp.NoteKeys, "note.md")
+	require.NotContains(t, resp.NoteKeys, "data/table.csv", "data files never get note keys")
+	require.NotContains(t, resp.NoteKeys, "views/tasks.base")
+	require.NotNil(t, resp.SkippedPaths, "skipped_paths must serialize as [] not null when nothing is skipped")
+	require.Empty(t, resp.SkippedPaths)
+
+	// Present in git, with byte-exact content.
+	list, err := deps.Cache.ListDataFiles(ctx, mustGetRepo(t, deps, "r1"), "",
+		[]string{"csv", "base"}, 5<<20)
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, f := range list.Files {
+		got[f.Path] = f.Content
+	}
+	require.Equal(t, "a,b\n1,2\n", got["data/table.csv"])
+	require.Equal(t, "filters:\n  - done\n", got["views/tasks.base"])
+
+	// Absent from the note tables.
+	for _, p := range []string{"data/table.csv", "views/tasks.base"} {
+		note, err := deps.Store.GetNote(ctx, "r1", p)
+		require.NoError(t, err)
+		require.Nil(t, note, "%s must not have a note row", p)
+	}
+}
+
+// deleted_paths already covers data files: the working-tree removal is shared,
+// and the note-row/render-blob deletions are no-ops for a path that never had
+// either.
+func TestHandleSync_deletesDataFiles(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepoWithFiles(t, bareURL, map[string]string{
+		"hello.md":  "# Hello",
+		"table.csv": "a,b\n",
+	})
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	payload := `{"files":[],"deleted_paths":["table.csv"]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	list, err := deps.Cache.ListDataFiles(ctx, mustGetRepo(t, deps, "r1"), "", []string{"csv"}, 5<<20)
+	require.NoError(t, err)
+	require.Empty(t, list.Files, "the data file must be gone from git")
+}
+
+// A data file path is validated exactly like a note path.
+func TestHandleSync_rejectsTraversalInDataFiles(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	payload := `{"files":[],"data_files":[{"path":"../../escaped.csv","content":"x"}]}`
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "invalid path")
+}
+
+// A .md path sent as a data file must be refused. The data-file write bypasses
+// the note pipeline entirely, so accepting one would put new content in git
+// while the note row, snapshot and render blob keep the old content — the
+// reader and the repo would disagree permanently. Worse, when the same path
+// appears in both lists, the data-file entry is appended to cacheFiles last and
+// silently overwrites the note's. The plugin drops .md client-side and the list
+// endpoint refuses an "md" extension; only this handler was missing the rule,
+// so any non-plugin client with editor role could do it.
+func TestHandleSync_rejectsMarkdownAsDataFile(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	for _, path := range []string{"notes/a.md", "notes/A.MD"} {
+		payload := `{"files":[{"path":"notes/a.md","md_content":"# Note","encrypted_html":"dGVzdA=="}],` +
+			`"data_files":[{"path":"` + path + `","content":"hijacked"}]}`
+		req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(payload))
+		req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+		rr := httptest.NewRecorder()
+		api.BuildRouter(deps).ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code, "path %q: %s", path, rr.Body.String())
+		require.Contains(t, rr.Body.String(), path)
+	}
+
+	// Nothing was committed: the whole request is refused, not partially applied.
+	note, err := deps.Store.GetNote(ctx, "r1", "notes/a.md")
+	require.NoError(t, err)
+	require.Nil(t, note)
+	out, err := exec.Command("git", "-C", bareURL, "show", "HEAD:notes/a.md").CombinedOutput()
+	require.Error(t, err, "notes/a.md must not exist in git: %s", out)
+}
+
+// An oversized data file is dropped from the commit rather than failing the
+// whole sync, but the client must be told: the response's skipped_paths is
+// the only signal that a file it sent never reached git.
+func TestHandleSync_skipsOversizedDataFile(t *testing.T) {
+	bareURL := newBareRepo(t)
+	seedBareRepo(t, bareURL)
+
+	deps := newTestDepsWithCache(t)
+	ctx := context.Background()
+	deps.Store.UpsertUser(ctx, "u1", "alice@x.com", "Alice")
+	deps.Store.CreateRepo(ctx, "r1", "Test Repo", bareURL, "", "main")
+	deps.Store.GrantAccess(ctx, "a1", "r1", "user", "u1", "editor")
+
+	huge := strings.Repeat("a", gitcache.MaxDataFileBytes+1)
+	body, err := json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{"path": "note.md", "md_content": "# Note", "encrypted_html": "dGVzdA=="},
+		},
+		"data_files": []map[string]any{
+			{"path": "data/huge.csv", "content": huge},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/api/repos/r1/sync", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", bearerHeader(t, deps, "u1", "alice@x.com", false))
+	rr := httptest.NewRecorder()
+	api.BuildRouter(deps).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp struct {
+		CommitSHA    string                     `json:"commit_sha"`
+		NoteKeys     map[string]string          `json:"note_keys"`
+		SkippedPaths []gitcache.SkippedDataFile `json:"skipped_paths"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotEmpty(t, resp.CommitSHA)
+	require.Contains(t, resp.NoteKeys, "note.md", "the rest of the sync still commits")
+
+	require.Len(t, resp.SkippedPaths, 1)
+	require.Equal(t, "data/huge.csv", resp.SkippedPaths[0].Path)
+	require.Equal(t, "too_large", resp.SkippedPaths[0].Reason)
+	require.Equal(t, int64(gitcache.MaxDataFileBytes+1), resp.SkippedPaths[0].Size)
+
+	// The note reached git (ListDataFiles always excludes .md, so check the
+	// bare repo directly)...
+	noteContent, err := exec.Command("git", "-C", bareURL, "show", "HEAD:note.md").Output()
+	require.NoError(t, err)
+	require.Equal(t, "# Note", strings.TrimSpace(string(noteContent)))
+
+	// ...but the oversized data file did not.
+	list, err := deps.Cache.ListDataFiles(ctx, mustGetRepo(t, deps, "r1"), "", []string{"csv"}, 5<<20)
+	require.NoError(t, err)
+	for _, f := range list.Files {
+		require.NotEqual(t, "data/huge.csv", f.Path, "oversized data file must not reach git")
+	}
+}

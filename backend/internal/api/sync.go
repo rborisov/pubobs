@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -25,6 +26,14 @@ type syncFilePayload struct {
 	MDContent     string         `json:"md_content"`
 	EncryptedHTML string         `json:"encrypted_html"`
 	Frontmatter   map[string]any `json:"frontmatter"`
+}
+
+// syncDataFilePayload is a non-note text file (CSV/JSON/YAML/base) synced
+// verbatim. Unlike syncFilePayload it carries no rendered HTML and no
+// frontmatter: it is never rendered, never encrypted, and never becomes a note.
+type syncDataFilePayload struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 func handleSync(deps *Deps) http.HandlerFunc {
@@ -63,13 +72,55 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		}
 
 		var payload struct {
-			Files        []syncFilePayload  `json:"files"`
-			Assets       []syncAssetPayload `json:"assets"`
-			DeletedPaths []string           `json:"deleted_paths"`
+			Files        []syncFilePayload     `json:"files"`
+			Assets       []syncAssetPayload    `json:"assets"`
+			DataFiles    []syncDataFilePayload `json:"data_files"`
+			DeletedPaths []string              `json:"deleted_paths"`
 		}
 		if err := readJSON(r, &payload); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
+		}
+
+		// Validate every client-supplied path before anything is written.
+		// One rejection fails the whole request: a sync is a single commit,
+		// and silently dropping one bad path would produce a commit the
+		// client believes is complete but isn't.
+		for _, f := range payload.Files {
+			if !validRepoPath(f.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+f.Path)
+				return
+			}
+		}
+		for _, a := range payload.Assets {
+			if !validRepoPath(a.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+a.Path)
+				return
+			}
+		}
+		for _, p := range payload.DeletedPaths {
+			if !validRepoPath(p) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+p)
+				return
+			}
+		}
+		for _, d := range payload.DataFiles {
+			if !validRepoPath(d.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+d.Path)
+				return
+			}
+			// A .md path must never arrive as a data file. The data-file write
+			// bypasses the note pipeline entirely, so it would put new content
+			// in git while the note row, snapshot and render blob keep the old
+			// one — a permanent disagreement between the reader and the repo.
+			// (And when the same path appears in both lists, the data-file
+			// write is appended to cacheFiles last and silently wins.) The list
+			// endpoint already refuses "md" as an extension; this is the same
+			// rule on the write path, which only the plugin enforced so far.
+			if strings.HasSuffix(strings.ToLower(d.Path), ".md") {
+				writeError(w, http.StatusBadRequest, "md files sync as notes, not data files: "+d.Path)
+				return
+			}
 		}
 
 		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
@@ -78,12 +129,39 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		cacheFiles := make([]gitcache.SyncFile, len(payload.Files))
-		for i, f := range payload.Files {
-			cacheFiles[i] = gitcache.SyncFile{
+		// Data files join the same commit as the notes. At the git layer the
+		// two are the same operation (write text to a path), so they share
+		// cacheFiles; the distinction lives in the note-pipeline loop below,
+		// which iterates payload.Files only — that is what keeps a .csv from
+		// becoming a note.
+		cacheFiles := make([]gitcache.SyncFile, 0, len(payload.Files)+len(payload.DataFiles))
+		for _, f := range payload.Files {
+			cacheFiles = append(cacheFiles, gitcache.SyncFile{
 				Path:      f.Path,
 				MDContent: f.MDContent,
+			})
+		}
+		// skippedPaths is reported back to the client so a data file that
+		// silently vanished from the commit isn't mistaken for one that
+		// synced. Initialized non-nil so it serializes as [] rather than
+		// null when nothing is skipped.
+		skippedPaths := []gitcache.SkippedDataFile{}
+		for _, d := range payload.DataFiles {
+			// Re-enforced server-side: the client's own cap is a setting, not
+			// a guarantee.
+			if len(d.Content) > gitcache.MaxDataFileBytes {
+				fmt.Printf("sync %s: skipping oversized data file %s (%d bytes)\n", repoID, d.Path, len(d.Content))
+				skippedPaths = append(skippedPaths, gitcache.SkippedDataFile{
+					Path:   d.Path,
+					Size:   int64(len(d.Content)),
+					Reason: "too_large",
+				})
+				continue
 			}
+			cacheFiles = append(cacheFiles, gitcache.SyncFile{
+				Path:      d.Path,
+				MDContent: d.Content,
+			})
 		}
 
 		cacheAssets := make([]gitcache.SyncAsset, 0, len(payload.Assets))
@@ -144,11 +222,7 @@ func handleSync(deps *Deps) http.HandlerFunc {
 
 		sha, err := deps.Cache.Sync(r.Context(), repo, ownerCred, pushCred, cacheFiles, cacheAssets, payload.DeletedPaths, commitMsg, authorName, authorEmail)
 		if err != nil {
-			if strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "rejected") {
-				writeError(w, http.StatusConflict, "push rejected: pull first, then sync")
-				return
-			}
-			writeError(w, http.StatusBadGateway, "sync failed: "+err.Error())
+			writeSyncError(w, repo.DefaultBranch, err)
 			return
 		}
 
@@ -216,9 +290,60 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		deps.Store.TouchLastUsedAt(r.Context(), repoID)
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"commit_sha": sha,
-			"note_keys":  noteKeys,
+			"commit_sha":    sha,
+			"note_keys":     noteKeys,
+			"skipped_paths": skippedPaths,
 		})
+	}
+}
+
+// writeSyncError maps a failed Cache.Sync onto a status and a message the
+// person syncing can act on.
+//
+// The previous implementation matched the substring "rejected" anywhere in
+// git's output and reported every hit as `push rejected: pull first, then
+// sync`. That single line collapsed three unrelated failures — a token
+// without write access, a protected/hook-guarded branch, and a genuine
+// non-fast-forward — into the one diagnosis that is almost never the real
+// cause here: Sync fetches and hard-resets to the remote tip immediately
+// before it commits (getOrClone → FetchReset), so the local clone cannot be
+// *persistently* behind the remote. It also advised a remedy that does not
+// exist in this product — there is no user-facing "pull" of git history to
+// perform — which is what made a brand-new repo whose credential simply
+// could not write look like a merge conflict.
+//
+// Reasons are taken from gitcache.PushRejectionReason, which is scrubbed of
+// the credentials embedded in the remote URL; raw err.Error() is never sent
+// to the client for the same reason.
+func writeSyncError(w http.ResponseWriter, branch string, err error) {
+	if branch == "" {
+		branch = "the default branch"
+	}
+	reason := gitcache.PushRejectionReason(err)
+
+	switch {
+	case errors.Is(err, gitcache.ErrGitNonFastForward):
+		msg := fmt.Sprintf("the remote %s moved while this sync was in flight — sync again", branch)
+		if reason != "" {
+			msg += " (" + reason + ")"
+		}
+		writeError(w, http.StatusConflict, msg)
+
+	case errors.Is(err, gitcache.ErrGitPushRejected):
+		msg := fmt.Sprintf("the git remote refused the push to %s — check that the git credential used for this repo has write access to it", branch)
+		if reason != "" {
+			msg += ". Remote said: " + reason
+		}
+		writeError(w, http.StatusForbidden, msg)
+
+	case errors.Is(err, gitcache.ErrGitAuthFailed):
+		writeError(w, http.StatusForbidden, "the git remote rejected the credential for this repo — check the stored git credential")
+
+	case errors.Is(err, gitcache.ErrGitOpTimedOut):
+		writeError(w, http.StatusGatewayTimeout, "the git remote did not respond in time — try again")
+
+	default:
+		writeError(w, http.StatusBadGateway, "sync failed: "+gitcache.Redact(err.Error()))
 	}
 }
 

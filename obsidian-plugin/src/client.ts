@@ -1,5 +1,5 @@
 import { requestUrl, RequestUrlParam } from 'obsidian';
-import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry } from './types';
+import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry, DataFileListResponse, SkippedDataFile } from './types';
 
 // Sync payloads (vault CSS + rendered notes/assets) can run tens of MB
 // uncompressed; gzip shrinks JSON/base64 text by roughly 60-80%.
@@ -18,6 +18,11 @@ export interface SyncFile {
 export interface SyncAsset {
   path: string;       // repo-relative path (e.g. attachments/diagram.png)
   content: string;    // base64-encoded binary
+}
+
+export interface SyncDataFile {
+  path: string;    // repo-relative path
+  content: string; // raw text — not base64, not encrypted
 }
 
 /** URL-encode each path segment so Cyrillic/spaces survive routing intact. */
@@ -84,12 +89,22 @@ export class BackendClient {
       // rejection (payload too large, gateway timeout) or the backend being
       // unreachable. The status code alone doesn't tell us which, so avoid
       // guessing a single specific cause here.
-      throw new Error(
+      const err = new Error(
         `Server returned a non-JSON response (HTTP ${resp.status}). ` +
         'This usually means the request did not reach a running PubObs backend ' +
         '(e.g. a proxy/gateway rejection or timeout, or the backend being down) ' +
         'rather than an error PubObs itself reported.'
       );
+      // Carry the status exactly as the JSON error branch below does. Callers
+      // branch on `.status`, and its absence here is not a detail: a backend
+      // that predates an endpoint falls through to the static file server and
+      // answers with a plain-text "404 page not found", landing in *this*
+      // branch — so a caller's `status === 404` degrade-quietly guard could
+      // never fire and the user got an alarming "your backend is down" notice
+      // instead.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (err as any).status = resp.status;
+      throw err;
     }
 
     if (resp.status >= 400) {
@@ -130,10 +145,19 @@ export class BackendClient {
     return resp.json as TokenResponse;
   }
 
+  // skipped_paths is optional in the type even though the current backend
+  // always includes it: a plugin can be updated ahead of its backend, and a
+  // backend predating data-file sync returns a response with no such key at
+  // all. Making it required wouldn't make it present at runtime — it would
+  // just delete the type-level reminder, at the one call site that needs it,
+  // that the field can be absent.
   async sync(
     repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[],
-  ): Promise<{ commit_sha: string; note_keys?: Record<string, string> }> {
-    const body = await gzipCompress(JSON.stringify({ files, assets, deleted_paths: deletedPaths }));
+    dataFiles: SyncDataFile[] = [],
+  ): Promise<{ commit_sha: string; note_keys?: Record<string, string>; skipped_paths?: SkippedDataFile[] }> {
+    const body = await gzipCompress(JSON.stringify({
+      files, assets, deleted_paths: deletedPaths, data_files: dataFiles,
+    }));
     return this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/sync`,
       method: 'POST',
@@ -145,6 +169,11 @@ export class BackendClient {
 
   async listFiles(repoId: string): Promise<FileEntry[]> {
     return this.request({ url: `${this.baseUrl}/api/repos/${repoId}/files` });
+  }
+
+  async listDataFiles(repoId: string, exts: string[], maxBytes: number): Promise<DataFileListResponse> {
+    const q = `ext=${encodeURIComponent(exts.join(','))}&max_bytes=${maxBytes}`;
+    return this.request({ url: `${this.baseUrl}/api/repos/${repoId}/data-files?${q}` });
   }
 
   // getNoteKey mints (or fetches the already-minted) backend-authoritative

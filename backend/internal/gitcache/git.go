@@ -408,7 +408,7 @@ func (g *GitRunner) LsRemote(remoteURL, credJSON string) error {
 func (g *GitRunner) PushDryRun(dir, remoteURL, credJSON, branch string) error {
 	authedURL := credentialedURL(remoteURL, credJSON)
 	_, err := g.runNetwork(dir, g.fetchTimeout(), "push", "--dry-run", authedURL, "HEAD:"+branch)
-	return err
+	return classifyPushError(err)
 }
 
 // dubiousOwnershipMarker is the substring git (2.35.2+) prints when it
@@ -512,7 +512,7 @@ func (g *GitRunner) InitializeIfEmpty(dir, remoteURL, credJSON, branch string) e
 	}
 	authedURL := credentialedURL(remoteURL, credJSON)
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
-		return fmt.Errorf("initial push: %w", err)
+		return fmt.Errorf("initial push: %w", classifyPushError(err))
 	}
 	return nil
 }
@@ -544,7 +544,7 @@ func (g *GitRunner) AddCommitPush(dir, remoteURL, pushCredJSON, branch, message,
 	}
 	authedURL := credentialedURL(remoteURL, pushCredJSON)
 	if _, err := g.runNetwork(dir, g.fetchTimeout(), "push", authedURL, "HEAD:"+branch); err != nil {
-		return "", err
+		return "", classifyPushError(err)
 	}
 	// Bound loose-object growth. A repo that's synced/commented on regularly
 	// never idles long enough to be evicted, so without this every commit's
@@ -575,9 +575,39 @@ func (g *GitRunner) ListFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitNUL(out), nil
+}
+
+// ListFilesByExt returns tracked file paths whose extension is in exts (given
+// without a leading dot, e.g. "csv"). Uses the same -z NUL-delimited output as
+// ListFiles, for the same reason: git otherwise C-quotes and octal-escapes any
+// path containing non-ASCII bytes.
+func (g *GitRunner) ListFilesByExt(dir string, exts []string) ([]string, error) {
+	if len(exts) == 0 {
+		return nil, nil
+	}
+	// ":(icase)" makes the pathspec case-insensitive. Without it git uses
+	// case-sensitive fnmatch, so a vault file named TABLE.CSV would be pushed
+	// into the repo by the plugin (whose isDataFilePath lowercases the
+	// extension before matching) and then never listed back — syncing one way
+	// only, permanently missing remote updates.
+	args := []string{"ls-files", "-z", "--"}
+	for _, e := range exts {
+		args = append(args, ":(icase)*."+e)
+	}
+	out, err := g.run(dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	return splitNUL(out), nil
+}
+
+// splitNUL parses git's -z output into paths, dropping the trailing empty
+// element left by the final NUL terminator.
+func splitNUL(out string) []string {
 	out = strings.TrimSuffix(out, "\x00")
 	if out == "" {
-		return nil, nil
+		return nil
 	}
 	parts := strings.Split(out, "\x00")
 	files := make([]string, 0, len(parts))
@@ -586,7 +616,7 @@ func (g *GitRunner) ListFiles(dir string) ([]string, error) {
 			files = append(files, p)
 		}
 	}
-	return files, nil
+	return files
 }
 
 // ReadFile returns the content of a tracked file at HEAD.

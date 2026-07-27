@@ -155,6 +155,41 @@ describe('BackendClient', () => {
     expect(result[0].sha).toBe('abc123');
   });
 
+  // A backend that predates an endpoint has no route for it, so the request
+  // falls through to the static file server and comes back as plain text
+  // ("404 page not found") rather than JSON. Callers degrade quietly on a 404
+  // — the data-file pull does exactly this so an older backend means
+  // notes-only syncing instead of an alarming "your backend is down" notice on
+  // every sync — and that guard can only work if the status survives onto the
+  // error the way the JSON error branch already does it.
+  test('attaches the HTTP status to the error on a non-JSON response', async () => {
+    mockRequestUrl.mockResolvedValue({
+      status: 404,
+      get json(): unknown { throw new SyntaxError('Unexpected token p in JSON at position 0'); },
+      headers: {},
+      text: '404 page not found',
+      arrayBuffer: new ArrayBuffer(0),
+    } as unknown as RequestUrlResponse);
+
+    const err = await client.listDataFiles('repo-1', ['csv'], 1024).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { status?: number }).status).toBe(404);
+    expect((err as Error).message).toContain('non-JSON response');
+  });
+
+  test('attaches the HTTP status on a non-JSON 5xx too', async () => {
+    mockRequestUrl.mockResolvedValue({
+      status: 502,
+      get json(): unknown { throw new SyntaxError('bad json'); },
+      headers: {},
+      text: '<html>502 Bad Gateway</html>',
+      arrayBuffer: new ArrayBuffer(0),
+    } as unknown as RequestUrlResponse);
+
+    const err = await client.getMe().catch((e: unknown) => e);
+    expect((err as { status?: number }).status).toBe(502);
+  });
+
   test('encodeNotePath percent-encodes each segment but keeps slashes', () => {
     expect(encodeNotePath('notes/foo.md')).toBe('notes/foo.md');
     expect(encodeNotePath('знания/обзор.md')).toBe(
