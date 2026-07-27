@@ -37,3 +37,25 @@ func TestValidRepoPath(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDataFileExts(t *testing.T) {
+	got, err := parseDataFileExts(" base, .CSV ,json,, yaml,yaml ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"base", "csv", "json", "yaml"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+
+	for _, bad := range []string{"", "   ", ",,,", "md", "csv,md", "../etc", "c*v", "toolongextension"} {
+		if _, err := parseDataFileExts(bad); err == nil {
+			t.Errorf("parseDataFileExts(%q) = nil error, want error", bad)
+		}
+	}
+}
