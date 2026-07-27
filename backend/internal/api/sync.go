@@ -28,6 +28,14 @@ type syncFilePayload struct {
 	Frontmatter   map[string]any `json:"frontmatter"`
 }
 
+// syncDataFilePayload is a non-note text file (CSV/JSON/YAML/base) synced
+// verbatim. Unlike syncFilePayload it carries no rendered HTML and no
+// frontmatter: it is never rendered, never encrypted, and never becomes a note.
+type syncDataFilePayload struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 func handleSync(deps *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
@@ -64,9 +72,10 @@ func handleSync(deps *Deps) http.HandlerFunc {
 		}
 
 		var payload struct {
-			Files        []syncFilePayload  `json:"files"`
-			Assets       []syncAssetPayload `json:"assets"`
-			DeletedPaths []string           `json:"deleted_paths"`
+			Files        []syncFilePayload     `json:"files"`
+			Assets       []syncAssetPayload    `json:"assets"`
+			DataFiles    []syncDataFilePayload `json:"data_files"`
+			DeletedPaths []string              `json:"deleted_paths"`
 		}
 		if err := readJSON(r, &payload); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -95,6 +104,12 @@ func handleSync(deps *Deps) http.HandlerFunc {
 				return
 			}
 		}
+		for _, d := range payload.DataFiles {
+			if !validRepoPath(d.Path) {
+				writeError(w, http.StatusBadRequest, "invalid path: "+d.Path)
+				return
+			}
+		}
 
 		credJSON, err := decryptCreds(deps, repo.EncryptedCreds)
 		if err != nil {
@@ -102,12 +117,29 @@ func handleSync(deps *Deps) http.HandlerFunc {
 			return
 		}
 
-		cacheFiles := make([]gitcache.SyncFile, len(payload.Files))
-		for i, f := range payload.Files {
-			cacheFiles[i] = gitcache.SyncFile{
+		// Data files join the same commit as the notes. At the git layer the
+		// two are the same operation (write text to a path), so they share
+		// cacheFiles; the distinction lives in the note-pipeline loop below,
+		// which iterates payload.Files only — that is what keeps a .csv from
+		// becoming a note.
+		cacheFiles := make([]gitcache.SyncFile, 0, len(payload.Files)+len(payload.DataFiles))
+		for _, f := range payload.Files {
+			cacheFiles = append(cacheFiles, gitcache.SyncFile{
 				Path:      f.Path,
 				MDContent: f.MDContent,
+			})
+		}
+		for _, d := range payload.DataFiles {
+			// Re-enforced server-side: the client's own cap is a setting, not
+			// a guarantee.
+			if len(d.Content) > gitcache.MaxDataFileBytes {
+				fmt.Printf("sync %s: skipping oversized data file %s (%d bytes)\n", repoID, d.Path, len(d.Content))
+				continue
 			}
+			cacheFiles = append(cacheFiles, gitcache.SyncFile{
+				Path:      d.Path,
+				MDContent: d.Content,
+			})
 		}
 
 		cacheAssets := make([]gitcache.SyncAsset, 0, len(payload.Assets))
