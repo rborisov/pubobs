@@ -2,6 +2,7 @@ package gitcache
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +79,13 @@ func (c *Cache) ListDataFiles(ctx context.Context, repo *model.Repo, credJSON st
 		full := filepath.Join(dir, p)
 		info, err := os.Stat(full)
 		if err != nil {
-			continue // tracked but absent from the working tree; nothing to send
+			// Most commonly: tracked but absent from the working tree, nothing
+			// to send. This branch also covers genuine I/O errors (permission
+			// denied, disk failure, etc.); log so an unreadable file is
+			// diagnosable in production instead of silently vanishing from
+			// both Files and Skipped.
+			log.Printf("gitcache: list data files for %s: stat %q failed: %v", repo.ID, p, err)
+			continue
 		}
 		if info.Size() > maxBytes {
 			out.Skipped = append(out.Skipped, SkippedDataFile{Path: p, Size: info.Size(), Reason: "too_large"})
@@ -86,6 +93,7 @@ func (c *Cache) ListDataFiles(ctx context.Context, repo *model.Repo, credJSON st
 		}
 		content, err := os.ReadFile(full)
 		if err != nil {
+			log.Printf("gitcache: list data files for %s: read %q failed: %v", repo.ID, p, err)
 			continue
 		}
 		if !utf8.Valid(content) {
