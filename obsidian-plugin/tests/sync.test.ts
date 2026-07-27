@@ -747,7 +747,8 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
     const dataFiles = (client.sync as jest.Mock).mock.calls[0][4];
     const paths = dataFiles.map((d: { path: string }) => d.path).sort();
     expect(paths).toEqual(['data/table.csv', 'views/tasks.base']);
-    expect(dataFiles[0].content).toBe('a,b\n1,2\n');
+    const tableEntry = dataFiles.find((d: { path: string }) => d.path === 'data/table.csv');
+    expect(tableEntry.content).toBe('a,b\n1,2\n');
   });
 
   // The deletion trap: a data file that exists in both the vault and the repo
@@ -782,6 +783,45 @@ describe('SyncManager metadata readiness and per-file isolation', () => {
 
     const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
     expect(deletedPaths).toEqual(['data/gone.csv']);
+  });
+
+  // Narrowing or clearing dataFileExtensions means "stop syncing these",
+  // never "delete them from the repo" — a settings filter must not be a
+  // destructive operation on the user's git repo. Without the fix, these
+  // known-but-now-unenumerated paths would fall out of currentRepoPaths and
+  // be reported (and removed) as deletions.
+  test('clearing the data file extensions setting does not delete previously-synced data files', async () => {
+    const note = makeMockFile('Published/notes/a.md');
+    const metadataCache = makeMetadataCache(new Set([note.path]));
+    const app = makeMockApp([note], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    settings.dataFileExtensions = '';
+    settings.syncHashes = { 'repo-1': { 'data/table.csv': 'h', 'notes/a.md': 'h2' } } as any;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(client.sync).toHaveBeenCalled();
+    const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
+    expect(deletedPaths).not.toContain('data/table.csv');
+  });
+
+  test('narrowing the data file extensions setting does not delete files whose extension was dropped', async () => {
+    const note = makeMockFile('Published/notes/a.md');
+    const metadataCache = makeMetadataCache(new Set([note.path]));
+    const app = makeMockApp([note], metadataCache);
+    const client = makeMockClient();
+    const settings = makeSettings();
+    settings.dataFileExtensions = 'base';
+    settings.syncHashes = { 'repo-1': { 'data/table.csv': 'h', 'notes/a.md': 'h2' } } as any;
+
+    const manager = new SyncManager(app as any, client as any, settings as any, jest.fn().mockResolvedValue(undefined));
+    await manager.syncRepo('repo-1');
+
+    expect(client.sync).toHaveBeenCalled();
+    const deletedPaths = (client.sync as jest.Mock).mock.calls[0][3];
+    expect(deletedPaths).not.toContain('data/table.csv');
   });
 
   test('an oversized data file is skipped with a Notice naming it', async () => {

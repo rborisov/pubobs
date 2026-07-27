@@ -321,7 +321,8 @@ export class SyncManager {
     // Data files live in the same syncHashes map as notes, so if they were not
     // registered here every one of them would be deleted on the next sync.
     const dataExts = parseDataFileExtensions(this.settings.dataFileExtensions ?? '');
-    const dataMaxBytes = Math.max(1, this.settings.dataFileMaxMB ?? 5) * 1024 * 1024;
+    const dataMaxMB = this.settings.dataFileMaxMB ?? 5;
+    const dataMaxBytes = Math.max(1, dataMaxMB) * 1024 * 1024;
     const syncDataFiles: SyncDataFile[] = [];
     const oversized: string[] = [];
 
@@ -345,8 +346,9 @@ export class SyncManager {
           const bytes = utf8ByteLength(content);
           if (bytes > dataMaxBytes) {
             oversized.push(`${f.path} (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
-            // Deliberately keep the previous hash: not sending the file must
-            // not look like "unchanged" next time either.
+            // Keep the hash of what the repo actually holds, since we are
+            // not changing it: this is what makes a revert to that same
+            // last-pushed content compare equal and correctly skip next time.
             newHashes[repoPath] = storedHashes[repoPath] ?? '';
             continue;
           }
@@ -367,7 +369,7 @@ export class SyncManager {
 
     if (oversized.length > 0) {
       new Notice(
-        `PubObs: ${oversized.length} data file(s) too large for the ${this.settings.dataFileMaxMB} MB limit — ${oversized.join(', ')}`,
+        `PubObs: ${oversized.length} data file(s) too large for the ${dataMaxMB} MB limit — ${oversized.join(', ')}`,
         10000,
       );
     }
@@ -385,7 +387,14 @@ export class SyncManager {
     for (const p of Object.keys(this.settings.noteKeys?.[repoId] ?? {})) {
       knownPaths.add(p);
     }
-    const deletedPaths = [...knownPaths].filter(p => !currentRepoPaths.has(p));
+    const deletedPaths = [...knownPaths].filter(p => {
+      if (currentRepoPaths.has(p)) return false;
+      // A path this sync no longer enumerates is not a deletion. Narrowing or
+      // clearing the data-file extension setting means "stop syncing these",
+      // never "delete them from the repo" — a filter must not destroy data.
+      if (!p.endsWith('.md') && !isDataFilePath(p, dataExts)) return false;
+      return true;
+    });
 
     // Remove cached state for notes that no longer exist
     if (this.settings.noteKeys?.[repoId]) {
