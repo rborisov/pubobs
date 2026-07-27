@@ -89,12 +89,22 @@ export class BackendClient {
       // rejection (payload too large, gateway timeout) or the backend being
       // unreachable. The status code alone doesn't tell us which, so avoid
       // guessing a single specific cause here.
-      throw new Error(
+      const err = new Error(
         `Server returned a non-JSON response (HTTP ${resp.status}). ` +
         'This usually means the request did not reach a running PubObs backend ' +
         '(e.g. a proxy/gateway rejection or timeout, or the backend being down) ' +
         'rather than an error PubObs itself reported.'
       );
+      // Carry the status exactly as the JSON error branch below does. Callers
+      // branch on `.status`, and its absence here is not a detail: a backend
+      // that predates an endpoint falls through to the static file server and
+      // answers with a plain-text "404 page not found", landing in *this*
+      // branch — so a caller's `status === 404` degrade-quietly guard could
+      // never fire and the user got an alarming "your backend is down" notice
+      // instead.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (err as any).status = resp.status;
+      throw err;
     }
 
     if (resp.status >= 400) {

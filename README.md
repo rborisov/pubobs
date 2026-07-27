@@ -316,7 +316,8 @@ Download `main.js` and `manifest.json` from the [latest release](https://github.
 ### Data files
 
 Besides notes, PubObs syncs non-markdown files both ways — Obsidian Bases
-(`.base`), CSV, JSON and YAML by default. Two plugin settings control this:
+(`.base`), CSV, JSON and YAML by default (the default list carries both the
+`yaml` and `yml` spellings). Two plugin settings control this:
 
 - **Data file types** — comma-separated extensions. Empty means notes only.
 - **Data file size limit (MB)** — default 5. Larger files are skipped in both
@@ -324,9 +325,19 @@ Besides notes, PubObs syncs non-markdown files both ways — Obsidian Bases
 
 Data files are stored in git alongside your notes but are never published:
 they get no note row, no encryption key and no rendered HTML, so they never
-appear in the reader or the notes list. Removing an extension from the
-setting only stops future syncing of that file type — it never deletes
-matching files already in the repo.
+appear in the reader or the notes list.
+
+On the **first** sync of a repo, a data file that already exists in your vault
+at the same path is replaced by the repo's copy. (This is long-standing note
+behavior applied to data files too: with no record of a previous sync there is
+nothing to tell a local edit apart from a stale leftover, so the repo wins.
+After that first sync, local edits you haven't pushed are never overwritten.)
+
+Removing an extension from the setting stops files of that type being synced,
+and while it stays removed they are never deleted from the repo. It is not a
+full "forget this file type": the plugin keeps the pull-state it already
+recorded for those paths, so re-adding the extension resumes from where it left
+off rather than starting fresh.
 
 ---
 

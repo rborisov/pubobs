@@ -542,6 +542,22 @@ export class SyncManager {
 
       // Persist hashes only after a successful sync
       for (const p of deletedPaths) delete newHashes[p];
+
+      // A file the server refused (its own 25 MB ceiling, which this client's
+      // dataFileMaxMB setting cannot raise) never reached git, so it must
+      // never be recorded as synced: newHashes already holds the hash of the
+      // content we tried to send, and persisting that would make every later
+      // sync see storedHashes[path] === hash, count the file as unchanged, and
+      // silently stop retrying it — permanently, until its content happened to
+      // change. Roll each skipped path back to what was actually last pushed
+      // (or drop it entirely if there was nothing), so the next sync re-sends
+      // it. This mirrors the client-side oversize branch above, which
+      // deliberately keeps `storedHashes[repoPath] ?? ''` for the same reason.
+      for (const s of result.skipped_paths ?? []) {
+        if (storedHashes[s.path] !== undefined) newHashes[s.path] = storedHashes[s.path];
+        else delete newHashes[s.path];
+      }
+
       this.settings.syncHashes[repoId] = newHashes;
       await this.saveSettings();
 
