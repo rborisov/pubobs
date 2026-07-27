@@ -47,6 +47,33 @@ export class PubObsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Data file types')
+      .setDesc('Comma-separated extensions synced both ways alongside notes (Bases, CSV, JSON, YAML). Leave empty to sync notes only.')
+      .addText(text =>
+        text
+          .setPlaceholder('base, csv, json, yaml, yml')
+          .setValue(this.plugin.settings.dataFileExtensions)
+          .onChange(async v => {
+            this.plugin.settings.dataFileExtensions = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Data file size limit (MB)')
+      .setDesc('Data files larger than this are skipped in both directions and named in the sync report. The server caps this at 25 MB.')
+      .addText(text =>
+        text
+          .setPlaceholder('5')
+          .setValue(String(this.plugin.settings.dataFileMaxMB))
+          .onChange(async v => {
+            const n = Number(v.trim());
+            this.plugin.settings.dataFileMaxMB = Number.isFinite(n) && n > 0 ? n : 5;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName('Authentication')
       .setDesc(this.plugin.settings.accessToken ? 'Authenticated ✓' : 'Not authenticated')
       .addButton(btn =>

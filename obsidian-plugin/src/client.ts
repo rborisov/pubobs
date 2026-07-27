@@ -1,5 +1,5 @@
 import { requestUrl, RequestUrlParam } from 'obsidian';
-import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry } from './types';
+import type { PubObsSettings, RepoInfo, TokenResponse, FileEntry, DataFileListResponse, SkippedDataFile } from './types';
 
 // Sync payloads (vault CSS + rendered notes/assets) can run tens of MB
 // uncompressed; gzip shrinks JSON/base64 text by roughly 60-80%.
@@ -18,6 +18,11 @@ export interface SyncFile {
 export interface SyncAsset {
   path: string;       // repo-relative path (e.g. attachments/diagram.png)
   content: string;    // base64-encoded binary
+}
+
+export interface SyncDataFile {
+  path: string;    // repo-relative path
+  content: string; // raw text — not base64, not encrypted
 }
 
 /** URL-encode each path segment so Cyrillic/spaces survive routing intact. */
@@ -132,8 +137,11 @@ export class BackendClient {
 
   async sync(
     repoId: string, files: SyncFile[], assets: SyncAsset[], deletedPaths: string[],
-  ): Promise<{ commit_sha: string; note_keys?: Record<string, string> }> {
-    const body = await gzipCompress(JSON.stringify({ files, assets, deleted_paths: deletedPaths }));
+    dataFiles: SyncDataFile[] = [],
+  ): Promise<{ commit_sha: string; note_keys?: Record<string, string>; skipped_paths?: SkippedDataFile[] }> {
+    const body = await gzipCompress(JSON.stringify({
+      files, assets, deleted_paths: deletedPaths, data_files: dataFiles,
+    }));
     return this.request({
       url: `${this.baseUrl}/api/repos/${repoId}/sync`,
       method: 'POST',
@@ -145,6 +153,11 @@ export class BackendClient {
 
   async listFiles(repoId: string): Promise<FileEntry[]> {
     return this.request({ url: `${this.baseUrl}/api/repos/${repoId}/files` });
+  }
+
+  async listDataFiles(repoId: string, exts: string[], maxBytes: number): Promise<DataFileListResponse> {
+    const q = `ext=${encodeURIComponent(exts.join(','))}&max_bytes=${maxBytes}`;
+    return this.request({ url: `${this.baseUrl}/api/repos/${repoId}/data-files?${q}` });
   }
 
   // getNoteKey mints (or fetches the already-minted) backend-authoritative
