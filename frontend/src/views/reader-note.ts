@@ -62,11 +62,16 @@ export function readerNoteView(repoId: string, rawNotePath: string): HTMLElement
 // once ever) so switching repos picks up that repo's own theme. A stale theme
 // from a prior repo is kept on screen until the new one arrives, avoiding an
 // unstyled flash mid-navigation.
-function injectRepoTheme(repoId: string): void {
+// On a guest-closed repo the unsigned URL 404s (a plain fetch carries no bearer
+// token, and neither would a <link>), so the eager call is a fast path for
+// guest-open repos only; loadNote retries with the signed theme_css_url from the
+// note response once that lands. The retry is skipped when the eager attempt
+// already applied this repo's theme.
+function injectRepoTheme(repoId: string, signedURL?: string): void {
   const existing = document.getElementById('obsidian-theme-css');
   if (existing?.getAttribute('data-repo-id') === repoId) return;
 
-  void fetch(`/pub/${repoId}/assets/_pubobs/obsidian.css`)
+  void fetch(signedURL ?? `/pub/${repoId}/assets/_pubobs/obsidian.css`)
     .then(r => r.ok ? r.text() : '')
     .catch(() => '')
     .then(cssText => {
@@ -138,6 +143,10 @@ async function loadNote(
   // the repo list in readerNoteView; corrected here now that access is known.
   if (!note.has_repo_access) back.href = '#/login';
 
+  // Retry the theme with a signed URL — the eager unsigned attempt in
+  // readerNoteView only succeeds on guest-open repos.
+  if (note.theme_css_url) injectRepoTheme(repoId, note.theme_css_url);
+
   // Swap the skeleton out for the real note content.
   article.innerHTML = '';
 
@@ -206,6 +215,14 @@ async function loadNote(
     htmlContent = '<p style="color:#888;font-style:italic">Open this note via a shared link to view its content.</p>';
   }
   content.innerHTML = htmlContent;
+
+  // A share-link-only visitor decrypts the note HTML in the browser, so its
+  // <img> tags still carry the bare asset URLs the plugin wrote. Those 404 on a
+  // guest-closed repo — an <img src> can't send an Authorization header — so
+  // swap in the signed URLs the backend minted for exactly this note's assets.
+  // Callers who got html_content need nothing here: theirs are already signed.
+  applyAssetSignatures(content, note.asset_sigs);
+
   for (const cb of Array.from(content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox'))) {
     cb.style.setProperty('appearance', 'auto', 'important');
     cb.style.setProperty('-webkit-appearance', 'checkbox', 'important');
@@ -257,6 +274,18 @@ async function loadNote(
   wrap.appendChild(commentsSection);
   const commentsList = commentsSection.querySelector(`#comments-list-${note.id}`) as HTMLElement;
   loadComments(repoId, notePath, commentsList, effectiveKey);
+}
+
+// applyAssetSignatures rewrites asset srcs in freshly-inserted note HTML to the
+// signed equivalents from the note response. Keyed by the exact src attribute
+// value, which is how the backend built the map (see signedAssetURLs) — so an
+// src the map doesn't mention is left alone rather than guessed at.
+function applyAssetSignatures(root: HTMLElement, sigs?: Record<string, string>): void {
+  if (!sigs) return;
+  for (const img of Array.from(root.querySelectorAll<HTMLImageElement>('img[src]'))) {
+    const signed = sigs[img.getAttribute('src') ?? ''];
+    if (signed) img.setAttribute('src', signed);
+  }
 }
 
 // buildShareControl renders a small popover offering the two canonical share

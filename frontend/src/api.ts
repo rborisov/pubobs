@@ -378,6 +378,15 @@ export interface PubNoteDetail {
   // member) rather than only this one note via ?key=. Drives whether "Back"
   // goes to the repo note list or the login screen.
   has_repo_access?: boolean;
+  // Original asset src -> signed src, for a share-link-only visitor whose note
+  // HTML is decrypted in the browser and so couldn't have signatures baked in
+  // server-side. A browser can't put a bearer token on an <img src>, so on a
+  // guest-closed repo these signed URLs are the only way its images load.
+  // Absent for callers who receive html_content (already signed).
+  asset_sigs?: Record<string, string>;
+  // Signed URL for the repo's exported Obsidian theme, which the reader loads
+  // itself rather than via the note HTML.
+  theme_css_url?: string;
 }
 
 // pubFetch attaches a Bearer token when the user is logged in so private repos

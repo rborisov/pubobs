@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pubobs/backend/internal/auth"
@@ -297,15 +298,64 @@ func handlePubGetNote(deps *Deps) http.HandlerFunc {
 			"has_repo_access": hasRepoAccess,
 		}
 
+		// Every asset URL the reader will hit needs a signature, since the
+		// browser can't put a bearer token on an <img src>. Minted here, after
+		// pubNoteAccess has already authorized this caller for this note.
+		assetExp := time.Now().Add(assetSigTTL).Unix()
+		secret := deps.Config.SecretKey
+
 		if render.HTMLContent != "" {
-			resp["html_content"] = rewriteRepoID(render.HTMLContent, repoID)
+			resp["html_content"] = signAssetURLsInHTML(secret, repoID, rewriteRepoID(render.HTMLContent, repoID), assetExp)
+		} else if !hasRepoAccess {
+			// Share-link-only visitor: their note HTML stays encrypted until the
+			// browser decrypts it, so the signatures its <img> tags need can't be
+			// baked in above. Decrypt the blob here purely to enumerate which
+			// asset paths this one note references, and return a signature for
+			// each. No new trust boundary: the backend already owns this note's
+			// key and already decrypts the same blob for repo members.
+			if sigs := shareVisitorAssetSigs(r.Context(), deps, repoID, notePath, note, assetExp); len(sigs) > 0 {
+				resp["asset_sigs"] = sigs
+			}
 		}
 		if render.Pending {
 			resp["render_pending"] = true
 		}
 
+		// The repo's Obsidian theme is an asset too, and is referenced by the
+		// reader rather than by the note HTML — so it gets its own signed URL,
+		// or a shared note on a private repo would render unstyled.
+		resp["theme_css_url"] = "/pub/" + repoID + "/assets/" + themeCSSPath +
+			"?" + assetSigQuery(secret, repoID, themeCSSPath, assetExp)
+
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// shareVisitorAssetSigs decrypts a shared note's render blob server-side for the
+// sole purpose of listing the asset URLs that note embeds, returning a signed
+// URL for each (see signedAssetURLs). Only called for share-link-only visitors,
+// who never receive the decrypted HTML itself.
+//
+// Returns nil whenever the blob is missing or undecryptable: a note with no
+// usable signatures still reads fine apart from its images, which is not worth
+// failing the whole note response over.
+func shareVisitorAssetSigs(ctx context.Context, deps *Deps, repoID, notePath string, note *model.Note, exp int64) map[string]string {
+	if note.EncryptionKey == "" {
+		return nil
+	}
+	rstore, err := deps.Resolver.RenderStoreFor(ctx, repoID)
+	if err != nil {
+		return nil
+	}
+	data, err := rstore.Read(repoID, notePath)
+	if err != nil || data == nil {
+		return nil
+	}
+	html, err := decryptNoteRenderHTML(note.EncryptionKey, data)
+	if err != nil {
+		return nil
+	}
+	return signedAssetURLs(deps.Config.SecretKey, repoID, html, exp)
 }
 
 // noteHTMLResult is the resolved HTML for handlePubGetNote, plus a flag when
@@ -494,7 +544,13 @@ func handlePubGetAsset(deps *Deps) http.HandlerFunc {
 		repoID := chi.URLParam(r, "repoId")
 		assetPath := chi.URLParam(r, "*")
 
-		if pubRepoAccess(r, deps, repoID) == nil {
+		// A browser cannot put an Authorization header on an <img src>, so
+		// repo access alone would make every image in every note on a
+		// guest-closed repo unreachable. A signature minted by the note-read
+		// handler for this exact repo+path stands in for it — see assetsig.go.
+		q := r.URL.Query()
+		if pubRepoAccess(r, deps, repoID) == nil &&
+			!validAssetSig(deps.Config.SecretKey, repoID, assetPath, q.Get("exp"), q.Get("sig")) {
 			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
