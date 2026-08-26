@@ -159,7 +159,7 @@ PubObs requires an OIDC provider. The installer asks interactively, but you can 
 ### Google
 
 1. [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials → Create OAuth 2.0 Client ID (Web application)
-2. Authorized redirect URI: `https://pubobs.example.com/auth/oidc/callback`
+2. Authorized redirect URI: `https://pubobs.example.com/auth/callback`
 3. Set in `.env`:
 
    ```env
@@ -170,7 +170,7 @@ PubObs requires an OIDC provider. The installer asks interactively, but you can 
 
 ### Yandex (optional second provider)
 
-1. [Yandex OAuth](https://oauth.yandex.ru) → Create app → callback: `https://pubobs.example.com/auth/yandex/callback`
+1. [Yandex OAuth](https://oauth.yandex.ru) → Create app → callback: `https://pubobs.example.com/auth/callback`
 2. Set in `.env`:
 
    ```env
